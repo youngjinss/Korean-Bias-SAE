@@ -187,7 +187,6 @@ def main():
         for result in results:
             logger.info(f"  '{result.prompt}'")
             logger.info(f"    P(남자)={result.p_male:.4f}, P(여자)={result.p_female:.4f}")
-            logger.info(f"    Logit(남자)={result.logit_male:.4f}, Logit(여자)={result.logit_female:.4f}")
             logger.info(f"    Bias Score (P(max)-P(min))={result.bias_score:.4f}, Predicted={result.predicted_gender}")
 
         logger.info("\nAggregate Statistics:")
