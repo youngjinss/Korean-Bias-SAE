@@ -1,0 +1,92 @@
+# Experiment Configuration for Korean Bias SAE Project
+
+# Model Configuration
+model:
+  name: "LGAI-EXAONE/EXAONE-3.0-7.8B-Instruct"
+  device: "cuda"  # or "cpu" for testing
+  dtype: "float16"  # or "float32" for better precision
+
+# SAE Configuration
+sae:
+  # Path to pre-trained gSAE from korean-sparse-llm-features-open
+  # UPDATE THIS PATH after checking prerequisites
+  path: "../korean-sparse-llm-features-open/outputs/sae-gated_exaone-8b_keat-ko_q1/model.pth"
+  feature_dim: 100000
+  activation_dim: 4096
+  target_layer: 15  # Which layer to extract from (check SAE training config)
+  token_position: "last"  # last, mean, or specific
+  sae_type: "gated"  # gated or standard
+
+# Linear Probe Configuration
+probe:
+  input_dim: 100000  # SAE feature dimension
+  output_dim: 2  # Binary: 남자 or 여자
+  hidden_dims: []  # Empty = simple linear layer; can add [512, 256] for MLP
+  learning_rate: 1e-3
+  batch_size: 32
+  epochs: 50
+  early_stopping_patience: 5
+  weight_decay: 1e-5  # L2 regularization
+  loss_type: "kl"  # kl (KL divergence) or ce (cross-entropy)
+
+# IG² Configuration
+ig2:
+  num_steps: 20  # Number of integration steps
+  use_squared_gap: true  # Use (logit1 - logit2)^2 instead of |logit1 - logit2|
+  threshold_ratio: 0.2  # 20% of max score to identify bias features
+  batch_size: 16  # For batched IG² computation
+
+# Data Configuration
+data:
+  # Pilot configuration (Week 1)
+  pilot:
+    num_modifiers:
+      negative: 5  # Start very small
+      positive: 5
+    num_templates: 3
+    modifier_types: ["N", "P"]  # Only basic negative and positive
+
+  # Medium configuration (Week 2)
+  medium:
+    num_modifiers:
+      negative: 50
+      positive: 50
+    num_templates: 5
+    modifier_types: ["N", "P"]
+
+  # Full configuration (Week 3+)
+  full:
+    num_modifiers:
+      negative: 300  # N, Ner, Nest
+      positive: 300  # P, Per, Pest
+    num_templates: 17
+    modifier_types: ["N", "Ner", "Nest", "P", "Per", "Pest"]
+
+  demographic: "성별"
+  demographic_values: ["남자", "여자"]
+
+# Baseline Bias Measurement
+baseline:
+  num_pilot_prompts: 10  # Number of prompts for Phase 0
+  bias_threshold: 0.1  # Minimum bias score to proceed (10%)
+
+# Experiment Tracking
+experiment:
+  name: "korean-bias-pilot"
+  stage: "pilot"  # pilot, medium, or full
+  output_dir: "results/"
+  seed: 42
+  log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+
+# Verification Configuration
+verification:
+  num_random_controls: 3  # Number of random feature control experiments
+  significance_level: 0.05  # p-value threshold for statistical tests
+  num_repeats: 3  # Number of times to repeat each experiment for stability
+
+# Paths (relative to project root)
+paths:
+  korean_sparse_llm_root: "../korean-sparse-llm-features-open"
+  data_dir: "data/"
+  results_dir: "results/"
+  checkpoints_dir: "checkpoints/"
