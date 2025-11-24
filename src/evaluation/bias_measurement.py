@@ -16,7 +16,7 @@ class BiasScorer:
     Measures bias in model predictions.
     """
 
-    def __init__(self, model_wrapper, demographic_values: List[str] = ["남자", "여자"]):
+    def __init__(self, model_wrapper, demographic_values: List[str] = [" 남자", " 여자"]):
         """
         Initialize bias scorer.
 
@@ -109,7 +109,7 @@ class BiasScorer:
 def measure_baseline_bias(
     model_wrapper,
     prompts: List[str],
-    demographic_values: List[str] = ["남자", "여자"]
+    demographic_values: List[str] = [" 남자", " 여자"]
 ) -> tuple:
     """
     Measure baseline bias across prompts.
