@@ -35,7 +35,7 @@ probe:
 # IG² Configuration
 ig2:
   num_steps: 20  # Number of integration steps
-  use_squared_gap: true  # Use (logit1 - logit2)^2 instead of |logit1 - logit2|
+  use_squared_gap: false  # Use (logit1 - logit2)^2 instead of |logit1 - logit2|
   threshold_ratio: 0.2  # 20% of max score to identify bias features
   batch_size: 16  # For batched IG² computation
 
@@ -66,7 +66,7 @@ data:
     modifier_types: ["N", "Ner", "Nest", "P", "Per", "Pest"]
 
   demographic: "성별"
-  demographic_values: ["남자", "여자"]
+  demographic_values: [" 남자", " 여자"]  # Leading space is important for tokenization!
 
 # Baseline Bias Measurement
 baseline:
@@ -76,7 +76,7 @@ baseline:
 # Experiment Tracking
 experiment:
   name: "korean-bias-pilot"
-  stage: "pilot"  # pilot, medium, or full
+  stage: "medium"  # pilot, medium, or full
   output_dir: "results/"
   seed: 42
   log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR
