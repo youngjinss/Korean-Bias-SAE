@@ -3,10 +3,11 @@
 Script 00: Check Prerequisites
 
 Verifies that all required components are available before starting the experiment:
+- PyTorch and CUDA availability
 - EXAONE model accessibility
-- Pre-trained gSAE availability
+- SAE implementation availability
+- Optional: Pre-trained SAE weights
 - GPU memory sufficiency
-- korean-sparse-llm-features-open codebase functionality
 
 Usage:
     python scripts/00_check_prerequisites.py
@@ -58,7 +59,7 @@ def check_exaone_model(config):
     print(f"Model: {model_name}")
 
     try:
-        from transformers import AutoTokenizer, AutoModelForCausalLM
+        from transformers import AutoTokenizer
 
         print("Loading tokenizer...")
         tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
@@ -95,23 +96,50 @@ def check_exaone_model(config):
         return False, None
 
 
-def check_sae_availability(config):
-    """Check pre-trained gSAE availability"""
+def check_sae_implementation():
+    """Check that SAE implementations are available"""
     print("=" * 60)
-    print("Checking gSAE Availability...")
+    print("Checking SAE Implementation...")
     print("=" * 60)
 
-    sae_path = Path(config['sae']['path'])
+    try:
+        from src.models.sae import GatedAutoEncoder, AutoEncoder
+        print(f"✅ GatedAutoEncoder imported successfully")
+        print(f"✅ AutoEncoder (Standard SAE) imported successfully")
+        return True
+    except Exception as e:
+        print(f"❌ Error importing SAE modules: {e}")
+        print("\nAction required:")
+        print(f"  1. Ensure src/models/sae/ directory exists")
+        print(f"  2. Check that gated_sae.py and standard_sae.py are present")
+        return False
+
+
+def check_sae_weights(config):
+    """Check pre-trained SAE weights (optional)"""
+    print("=" * 60)
+    print("Checking Pre-trained SAE Weights...")
+    print("=" * 60)
+
+    sae_path = config['sae'].get('path')
+
+    if sae_path is None or str(sae_path).lower() == 'null':
+        print(f"ℹ️  No pre-trained SAE path configured")
+        print(f"   This is OK - you can:")
+        print(f"   1. Train your own SAE")
+        print(f"   2. Use the baseline without SAE features")
+        print(f"   3. Configure a pre-trained SAE path later")
+        return True  # Not a failure
+
+    sae_path = Path(sae_path)
     print(f"SAE path: {sae_path}")
 
     if not sae_path.exists():
-        print(f"❌ SAE weights not found at: {sae_path}")
-        print("\nAction required:")
-        print(f"  1. Check if path is correct in config")
-        print(f"  2. If SAE doesn't exist, you need to train it first:")
-        print(f"     cd {config['paths']['korean_sparse_llm_root']}")
-        print(f"     bash x3_train_sae.sh")
-        print(f"  3. Or adjust config to use existing SAE")
+        print(f"⚠️  SAE weights not found at: {sae_path}")
+        print("\nOptions:")
+        print(f"  1. Train your own SAE (implementation needed)")
+        print(f"  2. Set sae.path to null in config to skip")
+        print(f"  3. Provide path to existing SAE weights")
         return False
 
     print(f"✅ SAE weights found")
@@ -147,43 +175,36 @@ def check_sae_availability(config):
         return False
 
 
-def check_korean_sparse_llm_repo(config):
-    """Check korean-sparse-llm-features-open codebase"""
+def check_project_structure():
+    """Check that project structure is correct"""
     print("=" * 60)
-    print("Checking korean-sparse-llm-features-open Repo...")
+    print("Checking Project Structure...")
     print("=" * 60)
 
-    repo_path = Path(config['paths']['korean_sparse_llm_root'])
-    print(f"Repo path: {repo_path}")
-
-    if not repo_path.exists():
-        print(f"❌ Repository not found at: {repo_path}")
-        print("\nAction required:")
-        print(f"  1. Clone the repository")
-        print(f"  2. Update config path if cloned elsewhere")
-        return False
-
-    print(f"✅ Repository directory exists")
-
-    # Check for key files
-    key_files = [
-        'lib/models/gated_sae/GatedSAE.py',
-        'lib/models/standard_sae/StandardSAE.py',
+    required_dirs = [
+        'src/models',
+        'src/models/sae',
+        'src/attribution',
+        'src/evaluation',
+        'src/utils',
+        'configs',
+        'data',
+        'scripts',
     ]
 
     all_exist = True
-    for file in key_files:
-        file_path = repo_path / file
-        if file_path.exists():
-            print(f"  ✅ {file}")
+    for dir_path in required_dirs:
+        full_path = Path(dir_path)
+        if full_path.exists():
+            print(f"  ✅ {dir_path}")
         else:
-            print(f"  ❌ {file} not found")
+            print(f"  ❌ {dir_path} not found")
             all_exist = False
 
     if all_exist:
-        print("✅ Key files present")
+        print("✅ Project structure correct")
     else:
-        print("⚠️  Some files missing, repo may be incomplete")
+        print("❌ Some directories missing")
 
     return all_exist
 
@@ -236,8 +257,9 @@ def main():
 
     results['pytorch_cuda'] = check_pytorch_cuda()
     results['exaone'], tokenizer = check_exaone_model(config)
-    results['sae'] = check_sae_availability(config)
-    results['repo'] = check_korean_sparse_llm_repo(config)
+    results['project_structure'] = check_project_structure()
+    results['sae_implementation'] = check_sae_implementation()
+    results['sae_weights'] = check_sae_weights(config)
     results['gpu_memory'] = check_gpu_memory(min_gb=14)  # Slightly lower threshold
 
     # Summary
@@ -246,12 +268,19 @@ def main():
     print("=" * 60)
 
     all_pass = True
-    critical_checks = ['exaone', 'sae', 'repo']
+    critical_checks = ['exaone', 'project_structure', 'sae_implementation']
+    optional_checks = ['sae_weights']
 
     for check, passed in results.items():
         status = "✅ PASS" if passed else "❌ FAIL"
-        critical = " (CRITICAL)" if check in critical_checks else ""
-        print(f"{status}: {check}{critical}")
+        if check in critical_checks:
+            label = " (CRITICAL)"
+        elif check in optional_checks:
+            status = "ℹ️  INFO" if not passed else "✅ PASS"
+            label = " (OPTIONAL)"
+        else:
+            label = ""
+        print(f"{status}: {check}{label}")
 
         if check in critical_checks and not passed:
             all_pass = False
@@ -262,6 +291,11 @@ def main():
         print("✅ All critical prerequisites met!")
         print("\nYou can proceed with:")
         print("  python scripts/01_measure_baseline_bias.py")
+
+        if not results.get('sae_weights'):
+            print("\nNote: SAE weights not configured.")
+            print("  - You can still run baseline bias measurements")
+            print("  - For SAE-based features, train or provide SAE weights")
     else:
         print("❌ Some critical prerequisites failed.")
         print("\nPlease address the issues above before proceeding.")
