@@ -3,7 +3,7 @@
 # Model Configuration
 model:
   name: "LGAI-EXAONE/EXAONE-3.0-7.8B-Instruct"
-  device: "cuda"  # or "cpu" for testing
+  device: "cuda:2"  # or "cpu" for testing
   dtype: "float16"  # or "float32" for better precision
 
 # SAE Configuration

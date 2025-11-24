@@ -1,7 +1,9 @@
-data/generated/
-
 # Python cache
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
+
+data/generated/
+
+results/*
