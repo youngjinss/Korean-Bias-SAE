@@ -8,9 +8,12 @@ model:
 
 # SAE Configuration
 sae:
-  # Path to pre-trained gSAE from korean-sparse-llm-features-open
-  # UPDATE THIS PATH after checking prerequisites
-  path: "../korean-sparse-llm-features-open/outputs/sae-gated_exaone-8b_keat-ko_q1/model.pth"
+  # Path to pre-trained SAE weights
+  # Options:
+  #   1. Train your own SAE (see scripts/train_sae.py - TO BE IMPLEMENTED)
+  #   2. Use pre-trained SAE from external source
+  #   3. Set to null to train from scratch
+  path: null  # Set to SAE weights path when available, e.g., "checkpoints/sae_model.pth"
   feature_dim: 100000
   activation_dim: 4096
   target_layer: 15  # Which layer to extract from (check SAE training config)
@@ -86,7 +89,6 @@ verification:
 
 # Paths (relative to project root)
 paths:
-  korean_sparse_llm_root: "../korean-sparse-llm-features-open"
   data_dir: "data/"
   results_dir: "results/"
   checkpoints_dir: "checkpoints/"
