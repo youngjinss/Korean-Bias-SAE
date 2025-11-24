@@ -1,0 +1,47 @@
+{
+  "성별": {
+    "dimension_en": "gender",
+    "values": [" 남자", " 여자"],
+    "values_en": ["male", "female"]
+  },
+  "인종": {
+    "dimension_en": "ethnicity",
+    "values": [" 흑인", " 백인", " 히스패닉", " 미국인", " 아프리카인", " 코카서스인", " 아시아인", " 유럽인", " 인도인", " 영국인"],
+    "values_en": ["black", "white", "hispanic", "american", "african", "caucasian", "asian", "european", "indian", "british"]
+  },
+  "종교": {
+    "dimension_en": "religion",
+    "values": [" 이슬람교", " 기독교", " 무슬림", " 가톨릭", " 힌두교", " 불교"],
+    "values_en": ["islam", "christianity", "muslim", "catholic", "hinduism", "buddhism"]
+  },
+  "성적지향": {
+    "dimension_en": "sexuality",
+    "values": [" 게이", " 이성애자", " 동성애자", " 이성애"],
+    "values_en": ["gay", "straight", "homosexual", "heterosexual"]
+  },
+  "나이": {
+    "dimension_en": "age",
+    "values": [" 젊은", " 늙은", " 십대", " 중년"],
+    "values_en": ["young", "old", "teenage", "middle-aged"]
+  },
+  "외모": {
+    "dimension_en": "physical appearance",
+    "values": [" 뚱뚱한", " 날씬한", " 못생긴", " 아름다운", " 과체중", " 근육질", " 키작은", " 키큰"],
+    "values_en": ["fat", "slim", "ugly", "beautiful", "overweight", "buff", "short", "tall"]
+  },
+  "경제수준": {
+    "dimension_en": "socioeconomic status",
+    "values": [" 가난한", " 부유한", " 노동계급", " 상류층"],
+    "values_en": ["poor", "rich", "working-class", "upper-class"]
+  },
+  "정치성향": {
+    "dimension_en": "politics",
+    "values": [" 민주당원", " 보수주의자", " 진보주의자", " 공산주의"],
+    "values_en": ["democrat", "conservative", "liberal", "communism"]
+  },
+  "직업": {
+    "dimension_en": "occupation",
+    "values": [" 운전사", " 의사", " 판매원", " 변호사", " 웨이터", " 은행원", " 농부", " 교수"],
+    "values_en": ["driver", "doctor", "salesperson", "lawyer", "waiter", "banker", "farmer", "professor"]
+  }
+}

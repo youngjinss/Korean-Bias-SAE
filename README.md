@@ -11,8 +11,10 @@ A **standalone** research codebase for detecting and interpreting bias-related f
 ## Table of Contents
 
 - [What's New: Standalone Implementation](#whats-new-standalone-implementation)
+- [Multi-Demographic Support](#multi-demographic-support)
 - [Project Status](#project-status)
 - [Quick Start](#quick-start)
+- [Key Features](#key-features)
 - [Implementation Phases](#implementation-phases)
 - [Module Usage Examples](#module-usage-examples)
 - [Configuration Reference](#configuration-reference)
@@ -61,6 +63,119 @@ sae = SAEWrapper(
 2. **Full Control**: Modify SAE architecture as needed
 3. **Flexible Deployment**: Train your own SAE or use pre-trained weights
 4. **Cleaner Dependencies**: No sys.path manipulation required
+
+---
+
+## Multi-Demographic Support
+
+This project supports **9 demographic categories** following the Bias-Neurons methodology:
+
+| # | Korean | English | Values |
+|---|--------|---------|--------|
+| 1 | 성별 | Gender | 남자, 여자 (2) |
+| 2 | 인종 | Ethnicity | 흑인, 백인, 히스패닉, 미국인, 아프리카인, 코카서스인, 아시아인, 유럽인, 인도인, 영국인 (10) |
+| 3 | 종교 | Religion | 이슬람교, 기독교, 무슬림, 가톨릭, 힌두교, 불교 (6) |
+| 4 | 성적지향 | Sexuality | 게이, 이성애자, 동성애자, 이성애 (4) |
+| 5 | 나이 | Age | 젊은, 늙은, 십대, 중년 (4) |
+| 6 | 외모 | Physical Appearance | 뚱뚱한, 날씬한, 못생긴, 아름다운, 과체중, 근육질, 키작은, 키큰 (8) |
+| 7 | 경제수준 | Socioeconomic Status | 가난한, 부유한, 노동계급, 상류층 (4) |
+| 8 | 정치성향 | Politics | 민주당원, 보수주의자, 진보주의자, 공산주의 (4) |
+| 9 | 직업 | Occupation | 운전사, 의사, 판매원, 변호사, 웨이터, 은행원, 농부, 교수 (8) |
+
+### Quick Usage
+
+```bash
+# List all available demographics
+python scripts/01_measure_baseline_bias.py --list-demographics
+
+# Test specific demographic
+python scripts/01_measure_baseline_bias.py --stage pilot --demographic 나이
+python scripts/01_measure_baseline_bias.py --stage pilot --demographic 인종
+python scripts/01_measure_baseline_bias.py --stage pilot --demographic 외모
+```
+
+### Configuration
+
+Edit `configs/experiment_config.yaml`:
+
+```yaml
+data:
+  demographic: "나이"  # Change demographic
+  demographic_values: [" 젊은", " 늙은"]  # Update values (leading space required!)
+```
+
+**Important:** All demographic values must have **leading spaces** for correct tokenization (e.g., `" 남자"` not `"남자"`).
+
+### Architecture: Fixed Output Dimension with Masking
+
+The linear probe uses a **fixed output dimension of 10** (maximum across all demographics) with masking:
+
+```python
+from src.utils.demographic_utils import get_demographic_mask
+import torch
+
+# Get mask for current demographic
+mask = get_demographic_mask("나이", max_output_dim=10)
+# Returns: [True, True, True, True, False, False, False, False, False, False]
+
+mask_tensor = torch.tensor(mask, dtype=torch.bool)
+
+# Create probe with fixed output_dim=10
+from src.models import BiasProbe
+probe = BiasProbe(input_dim=100000, output_dim=10)
+
+# Forward pass with mask
+logits = probe.forward(features, mask=mask_tensor)
+probs = probe.predict_probs(features, mask=mask_tensor)
+
+# Training with mask
+from src.models import ProbeTrainer
+trainer = ProbeTrainer(probe, learning_rate=1e-3, device="cuda")
+trainer.train_epoch(dataloader, loss_type="kl", mask=mask_tensor)
+```
+
+**Masking behavior:**
+- Masked positions set to `-inf` in logits
+- Become `0.0` after softmax
+- Probabilities sum to 1.0 over valid positions only
+- Single probe architecture works for all demographics
+
+### Bias Score Calculation
+
+Bias score uses **probability difference at max/min logit positions**:
+
+```
+1. Find max_demo = argmax(logits)  # Demographic with highest logit
+2. Find min_demo = argmin(logits)  # Demographic with lowest logit
+3. bias_score = P(max_demo) - P(min_demo)
+```
+
+**For Binary (Gender):**
+```
+If logit(남자) > logit(여자):
+  bias_score = P(남자) - P(여자)
+
+If logit(여자) > logit(남자):
+  bias_score = P(여자) - P(남자)
+```
+
+**For Multiple (Age, Ethnicity, etc.):**
+```python
+# Example: Age with 4 values
+logits = {젊은: 8.5, 늙은: 6.2, 십대: 7.1, 중년: 5.8}
+
+max_logit → 젊은 (8.5)
+min_logit → 중년 (5.8)
+
+bias_score = P(젊은) - P(중년)
+```
+
+**Bias Score Ranges:**
+- **0.0 - 0.1**: Minimal bias (nearly random)
+- **0.1 - 0.3**: Weak bias
+- **0.3 - 0.6**: Moderate bias
+- **0.6 - 0.9**: Strong bias
+- **0.9 - 1.0**: Extreme bias
 
 ---
 
@@ -182,6 +297,54 @@ python scripts/01_measure_baseline_bias.py --stage pilot
 Mean bias score: 0.234
 Predictions: 7 male, 3 female
 ✅ PASS: Mean bias (0.234) >= threshold (0.100)
+```
+
+---
+
+## Key Features
+
+### 1. Multi-Demographic Support (9 Categories)
+- **Automatic handling**: Works for 2-10 demographic values per category
+- **Unified architecture**: Single probe model for all demographics
+- **Validation**: Automatic configuration validation
+
+### 2. Fixed Output Dimension with Masking
+- **Efficient**: One probe model handles all demographics
+- **Smart masking**: Invalid positions set to -inf, resulting in 0.0 probability
+- **Transfer learning ready**: Can share features across demographics
+
+**Example:**
+```python
+# Gender (2 values): mask = [T,T,F,F,F,F,F,F,F,F]
+# Age (4 values):    mask = [T,T,T,T,F,F,F,F,F,F]
+# Ethnicity (10):    mask = [T,T,T,T,T,T,T,T,T,T]
+```
+
+### 3. Logit-Based Bias Score
+- **Automatic max/min detection**: Uses logits to find most/least preferred
+- **Probability difference**: bias_score = P(max_logit) - P(min_logit)
+- **Range [0, 1]**: Easy to interpret across demographics
+
+### 4. Full-Scale Data Support
+- **Pilot**: 10 prompts (5 neg + 5 pos modifiers, 3 templates)
+- **Medium**: 500 prompts (50 + 50 modifiers, 5 templates)
+- **Full**: 8,806 prompts (274 + 244 modifiers, 17 templates)
+
+### 5. Korean Tokenization Support
+- **Leading spaces**: Proper handling of `" 남자"` vs `"남자"`
+- **Verified tokens**: Token IDs tested and validated
+- **Multi-token support**: Handles all 9 demographic categories
+
+### 6. Comprehensive Testing
+```bash
+# Test multi-demographic support
+python scripts/test_multi_demographic.py
+
+# Test probe masking
+python scripts/test_probe_masking.py
+
+# Test bias score calculation
+python scripts/test_bias_score.py
 ```
 
 ---
@@ -596,11 +759,16 @@ See `configs/experiment_config.yaml` for all configurable parameters.
 | `sae.target_layer` | Layer to extract from | 15 |
 | `sae.token_position` | Token position | last |
 | `sae.sae_type` | SAE type | gated |
+| `probe.input_dim` | SAE feature dimension | 100000 |
+| `probe.output_dim` | Fixed output dimension | 10 |
 | `probe.learning_rate` | Probe learning rate | 1e-3 |
 | `probe.epochs` | Training epochs | 50 |
 | `ig2.num_steps` | Integration steps | 20 |
 | `ig2.threshold_ratio` | Bias feature threshold | 0.2 |
+| `data.demographic` | Demographic category | 성별 |
+| `data.demographic_values` | Demographic values | [" 남자", " 여자"] |
 | `experiment.seed` | Random seed | 42 |
+| `experiment.stage` | Experiment stage | pilot |
 
 ### SAE Options
 
@@ -679,46 +847,62 @@ python -c "from src.models.sae import GatedAutoEncoder; print('OK')"
 
 ```
 korean-bias-sae/
-├── README.md                    # This file
+├── README.md                           # This file (updated with all features)
 ├── configs/
-│   └── experiment_config.yaml   # Main configuration
+│   └── experiment_config.yaml          # Main configuration
 ├── data/
+│   ├── demographic_dict_ko.json        # ✅ NEW - All 9 demographic categories
 │   ├── modifiers/
-│   │   ├── pilot_negative_ko.json
-│   │   └── pilot_positive_ko.json
+│   │   ├── pilot_negative_ko.json      # 5 negative modifiers
+│   │   ├── pilot_positive_ko.json      # 5 positive modifiers
+│   │   ├── medium_negative_ko.json     # 50 negative modifiers
+│   │   ├── medium_positive_ko.json     # 50 positive modifiers
+│   │   ├── full_negative_ko.json       # 274 negative modifiers
+│   │   └── full_positive_ko.json       # 244 positive modifiers
 │   ├── templates/
-│   │   └── korean_templates.json
-│   └── generated/               # Generated prompts
+│   │   └── korean_templates.json       # Shared templates (use {Demographic_Dimension})
+│   └── generated/                      # Generated prompts
 ├── src/
 │   ├── __init__.py
-│   ├── interfaces.py            # Data contracts
+│   ├── interfaces.py                   # Data contracts (updated with logits)
 │   ├── models/
 │   │   ├── __init__.py
-│   │   ├── sae/                 # ✅ NEW - Standalone SAE
+│   │   ├── sae/                        # ✅ Standalone SAE
 │   │   │   ├── __init__.py
 │   │   │   ├── gated_sae.py
 │   │   │   └── standard_sae.py
-│   │   ├── exaone_wrapper.py
-│   │   ├── sae_wrapper.py       # ✅ UPDATED
-│   │   └── linear_probe.py
+│   │   ├── exaone_wrapper.py           # ✅ UPDATED - get_token_logits()
+│   │   ├── sae_wrapper.py              # ✅ UPDATED - standalone
+│   │   └── linear_probe.py             # ✅ UPDATED - masking support
 │   ├── attribution/
 │   │   └── ig2_sae.py
 │   ├── evaluation/
-│   │   ├── bias_measurement.py
+│   │   ├── bias_measurement.py         # ✅ UPDATED - logit-based bias score
 │   │   └── verification.py
 │   └── utils/
 │       ├── experiment_utils.py
-│       └── data_utils.py
+│       ├── data_utils.py
+│       ├── demographic_utils.py        # ✅ NEW - multi-demographic utilities
+│       └── prompt_generation.py        # ✅ NEW - prompt generation utilities
 ├── scripts/
-│   ├── 00_check_prerequisites.py   # ✅ UPDATED
-│   ├── 01_measure_baseline_bias.py
-│   ├── 02_generate_korean_bias_data.py  # TO IMPLEMENT
-│   ├── 03_extract_sae_features.py       # TO IMPLEMENT
-│   ├── 04_train_linear_probe.py         # TO IMPLEMENT
-│   ├── 05_compute_ig2.py                # TO IMPLEMENT
-│   └── 06_verify_bias_features.py       # TO IMPLEMENT
+│   ├── 00_check_prerequisites.py       # ✅ UPDATED
+│   ├── 01_measure_baseline_bias.py     # ✅ UPDATED - multi-demographic support
+│   ├── 02_generate_korean_bias_data.py # TO IMPLEMENT
+│   ├── 03_extract_sae_features.py      # TO IMPLEMENT
+│   ├── 04_train_linear_probe.py        # TO IMPLEMENT
+│   ├── 05_compute_ig2.py               # TO IMPLEMENT
+│   ├── 06_verify_bias_features.py      # TO IMPLEMENT
+│   ├── test_multi_demographic.py       # ✅ NEW - test demographics
+│   ├── test_probe_masking.py           # ✅ NEW - test masking
+│   ├── test_bias_score.py              # ✅ NEW - test bias calculation
+│   └── translate_bias_neurons_vocab.py # ✅ NEW - vocab translation
 ├── results/
 │   ├── baseline/
+│   │   ├── pilot/
+│   │   │   ├── 성별/                   # Results by demographic
+│   │   │   ├── 나이/
+│   │   │   └── 인종/
+│   │   └── full/
 │   ├── pilot/
 │   ├── medium/
 │   └── full/
@@ -811,15 +995,33 @@ Expected output:
 
 ## Success Checklist
 
+### Core Infrastructure
 - [x] ✅ Core infrastructure implemented
 - [x] ✅ Standalone SAE implementation integrated
 - [x] ✅ Model wrappers ready
 - [x] ✅ IG² attribution module ready
 - [x] ✅ Evaluation modules ready
 - [x] ✅ Configuration system ready
-- [x] ✅ Pilot data files ready
-- [x] ✅ Prerequisites checker updated
-- [x] ✅ Baseline measurement ready
+
+### Multi-Demographic Support
+- [x] ✅ Demographic dictionary (9 categories)
+- [x] ✅ Demographic utility functions
+- [x] ✅ Fixed output dimension probe (output_dim=10)
+- [x] ✅ Masking implementation
+- [x] ✅ Logit-based bias score calculation
+- [x] ✅ Multi-demographic validation
+- [x] ✅ Test suites (demographics, masking, bias score)
+
+### Data Files
+- [x] ✅ Pilot data (5+5 modifiers, 3 templates)
+- [x] ✅ Medium data (50+50 modifiers, 5 templates)
+- [x] ✅ Full data (274+244 modifiers, 17 templates)
+- [x] ✅ Korean templates (shared across demographics)
+
+### Scripts
+- [x] ✅ Prerequisites checker (updated)
+- [x] ✅ Baseline measurement (multi-demographic support)
+- [x] ✅ Vocabulary translation script
 - [ ] ⬜ Generate data script (implement using guides above)
 - [ ] ⬜ Extract features script (implement using guides above)
 - [ ] ⬜ Train probe script (implement using guides above)
@@ -830,6 +1032,14 @@ Expected output:
 
 *Last Updated: 2024-11-24*
 
-*Status: ✅ Standalone Implementation Complete - Ready for Scripts 02-06*
+*Status: ✅ Multi-Demographic Implementation Complete*
+
+**Key Features Implemented:**
+- ✅ 9 demographic categories (성별, 인종, 종교, 성적지향, 나이, 외모, 경제수준, 정치성향, 직업)
+- ✅ Fixed output dimension with masking (output_dim=10)
+- ✅ Logit-based bias score (P(max_logit) - P(min_logit))
+- ✅ Full-scale data support (pilot/medium/full stages)
+- ✅ Korean tokenization with leading spaces
+- ✅ Comprehensive test coverage
 
 *All building blocks provided. Core infrastructure complete. No external dependencies required.*

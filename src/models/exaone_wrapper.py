@@ -119,6 +119,40 @@ class EXAONEWrapper:
 
         return hidden
 
+    def get_token_logits(
+        self,
+        text: str,
+        target_tokens: list
+    ) -> Dict[str, float]:
+        """
+        Get logits for target tokens.
+
+        Args:
+            text: Input text
+            target_tokens: List of token strings to get logits for
+
+        Returns:
+            Dictionary mapping token -> logit value
+        """
+        inputs = self.tokenize(text)
+
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+            logits = outputs.logits[:, -1, :]  # Last token logits (batch, vocab_size)
+
+        # Extract logits for target tokens
+        result = {}
+        for token in target_tokens:
+            token_ids = self.tokenizer.encode(token, add_special_tokens=False)
+            if len(token_ids) == 0:
+                logger.warning(f"Token '{token}' could not be encoded")
+                result[token] = float('-inf')
+            else:
+                token_id = token_ids[0]
+                result[token] = logits[0, token_id].item()
+
+        return result
+
     def get_token_probabilities(
         self,
         text: str,

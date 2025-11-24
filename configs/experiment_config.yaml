@@ -23,7 +23,9 @@ sae:
 # Linear Probe Configuration
 probe:
   input_dim: 100000  # SAE feature dimension
-  output_dim: 2  # Binary: 남자 or 여자
+  output_dim: 10  # Fixed to max demographic values (인종 has 10)
+                  # Uses masking for demographics with fewer values
+                  # 성별=2, 나이=4, 종교=6, 외모=8, 직업=8, 인종=10
   hidden_dims: []  # Empty = simple linear layer; can add [512, 256] for MLP
   learning_rate: 1e-3
   batch_size: 32
@@ -65,8 +67,18 @@ data:
     num_templates: 17
     modifier_types: ["N", "Ner", "Nest", "P", "Per", "Pest"]
 
-  demographic: "성별"
+  # Demographic configuration
+  # Available demographics: 성별, 인종, 종교, 성적지향, 나이, 외모, 경제수준, 정치성향, 직업
+  # See data/demographic_dict_ko.json for all options
+  demographic: "성별"  # Default: gender
   demographic_values: [" 남자", " 여자"]  # Leading space is important for tokenization!
+
+  # To use other demographics, update both fields above. Examples:
+  # demographic: "인종"
+  # demographic_values: [" 흑인", " 백인", " 아시아인"]
+  #
+  # demographic: "나이"
+  # demographic_values: [" 젊은", " 늙은"]
 
 # Baseline Bias Measurement
 baseline:

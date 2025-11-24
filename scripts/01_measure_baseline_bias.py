@@ -21,6 +21,12 @@ import torch
 from src.utils.experiment_utils import load_config, set_seed, ExperimentLogger
 from src.utils.data_utils import save_json
 from src.utils.prompt_generation import generate_stage_prompts
+from src.utils.demographic_utils import (
+    get_demographic_values,
+    validate_demographic_config,
+    format_demographic_info,
+    get_all_demographics
+)
 from src.models import EXAONEWrapper
 from src.evaluation import measure_baseline_bias
 
@@ -49,16 +55,63 @@ def main():
                         help='Experiment stage')
     parser.add_argument('--sample-size', type=int, default=None,
                         help='Number of prompts to sample (default: all prompts)')
+    parser.add_argument('--demographic', type=str, default=None,
+                        help='Demographic category to test (성별, 인종, 종교, etc.). '
+                             'Overrides config. Use --list-demographics to see all options.')
+    parser.add_argument('--list-demographics', action='store_true',
+                        help='List all available demographic categories and exit')
     args = parser.parse_args()
+
+    # Handle --list-demographics
+    if args.list_demographics:
+        print("=" * 60)
+        print("AVAILABLE DEMOGRAPHIC CATEGORIES")
+        print("=" * 60)
+        try:
+            all_demographics = get_all_demographics()
+            for demo_kr, demo_info in all_demographics.items():
+                print(f"\n{demo_kr} ({demo_info['dimension_en']}):")
+                values_display = ", ".join([f"'{v.strip()}'" for v in demo_info['values']])
+                print(f"  Values: {values_display}")
+        except Exception as e:
+            print(f"Error loading demographics: {e}")
+        return 0
 
     # Load config
     config = load_config(args.config)
     set_seed(config['experiment']['seed'])
 
-    # Set up logger
-    output_dir = Path(config['paths']['results_dir']) / 'baseline' / args.stage
+    # Override demographic if specified via command line
+    if args.demographic:
+        try:
+            demographic_values = get_demographic_values(args.demographic)
+            config['data']['demographic'] = args.demographic
+            config['data']['demographic_values'] = demographic_values
+            logger_suffix = args.demographic
+        except ValueError as e:
+            print(f"❌ Error: {e}")
+            print("\nUse --list-demographics to see all available options")
+            return 1
+    else:
+        logger_suffix = config['data']['demographic']
+
+    # Validate demographic configuration
+    is_valid, message = validate_demographic_config(
+        config['data']['demographic'],
+        config['data']['demographic_values']
+    )
+    if not is_valid:
+        print(f"❌ Invalid demographic configuration: {message}")
+        return 1
+
+    # Set up logger (include demographic in output dir if specified)
+    if args.demographic:
+        output_dir = Path(config['paths']['results_dir']) / 'baseline' / args.stage / args.demographic
+    else:
+        output_dir = Path(config['paths']['results_dir']) / 'baseline' / args.stage
+
     logger = ExperimentLogger(
-        experiment_name=f"baseline_bias_{args.stage}",
+        experiment_name=f"baseline_bias_{args.stage}_{logger_suffix}",
         output_dir=str(output_dir),
         log_level=config['experiment']['log_level']
     )
@@ -67,6 +120,10 @@ def main():
     logger.info("=" * 60)
     logger.info("PHASE 0: BASELINE BIAS MEASUREMENT")
     logger.info("=" * 60)
+
+    # Log demographic information
+    logger.info(f"\nDemographic Category: {config['data']['demographic']}")
+    logger.info(format_demographic_info(config['data']['demographic']))
 
     # Load EXAONE model
     logger.info("\nLoading EXAONE model...")
@@ -130,7 +187,8 @@ def main():
         for result in results:
             logger.info(f"  '{result.prompt}'")
             logger.info(f"    P(남자)={result.p_male:.4f}, P(여자)={result.p_female:.4f}")
-            logger.info(f"    Bias Score={result.bias_score:.4f}, Predicted={result.predicted_gender}")
+            logger.info(f"    Logit(남자)={result.logit_male:.4f}, Logit(여자)={result.logit_female:.4f}")
+            logger.info(f"    Bias Score (P(max)-P(min))={result.bias_score:.4f}, Predicted={result.predicted_gender}")
 
         logger.info("\nAggregate Statistics:")
         for key, value in aggregate_stats.items():

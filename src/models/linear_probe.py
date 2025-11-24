@@ -17,7 +17,13 @@ class BiasProbe(nn.Module):
     Linear probe that maps SAE features to demographic prediction logits.
 
     Architecture:
-        SAE features (100K dims) -> Linear -> 2 logits (남자, 여자)
+        SAE features (100K dims) -> Linear -> output_dim logits
+
+    Supports masking for demographics with fewer than output_dim values.
+    For example, with output_dim=10:
+        - 성별 (2 values): mask=[T,T,F,F,F,F,F,F,F,F]
+        - 나이 (4 values): mask=[T,T,T,T,F,F,F,F,F,F]
+        - 인종 (10 values): mask=[T,T,T,T,T,T,T,T,T,T]
 
     Can be extended to MLP by specifying hidden_dims.
     """
@@ -25,7 +31,7 @@ class BiasProbe(nn.Module):
     def __init__(
         self,
         input_dim: int = 100000,
-        output_dim: int = 2,
+        output_dim: int = 10,
         hidden_dims: Optional[List[int]] = None
     ):
         """
@@ -33,7 +39,7 @@ class BiasProbe(nn.Module):
 
         Args:
             input_dim: SAE feature dimension
-            output_dim: Number of demographics (2 for binary)
+            output_dim: Fixed output dimension (max across all demographics)
             hidden_dims: Optional hidden layer dimensions for MLP
         """
         super().__init__()
@@ -58,30 +64,51 @@ class BiasProbe(nn.Module):
 
         self.network = nn.Sequential(*layers)
 
-    def forward(self, sae_features: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        sae_features: torch.Tensor,
+        mask: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         """
-        Forward pass.
+        Forward pass with optional masking.
 
         Args:
             sae_features: SAE feature activations (batch, input_dim)
+            mask: Boolean mask for valid positions (output_dim,)
+                  True = valid, False = padding
 
         Returns:
             Logits (batch, output_dim)
+            If mask provided, masked positions are set to -inf
         """
         logits = self.network(sae_features)
+
+        # Apply mask if provided
+        if mask is not None:
+            # Expand mask to batch dimension: (output_dim,) -> (1, output_dim)
+            mask = mask.unsqueeze(0)
+            # Set masked (invalid) positions to -inf
+            logits = logits.masked_fill(~mask, float('-inf'))
+
         return logits
 
-    def predict_probs(self, sae_features: torch.Tensor) -> torch.Tensor:
+    def predict_probs(
+        self,
+        sae_features: torch.Tensor,
+        mask: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         """
-        Get probability predictions.
+        Get probability predictions with masking.
 
         Args:
             sae_features: SAE feature activations (batch, input_dim)
+            mask: Boolean mask for valid positions (output_dim,)
 
         Returns:
             Probabilities (batch, output_dim)
+            Masked positions will have probability 0.0
         """
-        logits = self.forward(sae_features)
+        logits = self.forward(sae_features, mask=mask)
         probs = F.softmax(logits, dim=-1)
         return probs
 
@@ -120,14 +147,16 @@ class ProbeTrainer:
     def train_epoch(
         self,
         dataloader: DataLoader,
-        loss_type: str = "kl"
+        loss_type: str = "kl",
+        mask: Optional[torch.Tensor] = None
     ) -> Dict[str, float]:
         """
-        Train for one epoch.
+        Train for one epoch with optional masking.
 
         Args:
             dataloader: Training data loader
             loss_type: 'kl' for KL divergence or 'ce' for cross-entropy
+            mask: Boolean mask for valid demographic positions (output_dim,)
 
         Returns:
             Dictionary of metrics
@@ -136,13 +165,17 @@ class ProbeTrainer:
         total_loss = 0.0
         num_batches = 0
 
+        # Move mask to device if provided
+        if mask is not None:
+            mask = mask.to(self.device)
+
         for batch in dataloader:
             features, labels = batch
             features = features.to(self.device)
             labels = labels.to(self.device)
 
-            # Forward pass
-            logits = self.probe(features)
+            # Forward pass with mask
+            logits = self.probe(features, mask=mask)
 
             # Compute loss
             if loss_type == "kl":
@@ -169,14 +202,16 @@ class ProbeTrainer:
     def evaluate(
         self,
         dataloader: DataLoader,
-        loss_type: str = "kl"
+        loss_type: str = "kl",
+        mask: Optional[torch.Tensor] = None
     ) -> Dict[str, float]:
         """
-        Evaluate on validation set.
+        Evaluate on validation set with optional masking.
 
         Args:
             dataloader: Validation data loader
             loss_type: Loss type
+            mask: Boolean mask for valid demographic positions (output_dim,)
 
         Returns:
             Dictionary of metrics
@@ -185,13 +220,18 @@ class ProbeTrainer:
         total_loss = 0.0
         num_batches = 0
 
+        # Move mask to device if provided
+        if mask is not None:
+            mask = mask.to(self.device)
+
         with torch.no_grad():
             for batch in dataloader:
                 features, labels = batch
                 features = features.to(self.device)
                 labels = labels.to(self.device)
 
-                logits = self.probe(features)
+                # Forward pass with mask
+                logits = self.probe(features, mask=mask)
 
                 if loss_type == "kl":
                     log_probs = F.log_softmax(logits, dim=-1)
