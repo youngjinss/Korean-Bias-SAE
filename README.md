@@ -1,8 +1,66 @@
 # Korean Bias SAE: Bias Feature Detection in Korean LLMs via gSAE + IG²
 
-A research codebase for detecting and interpreting bias-related features in Korean language models using Sparse Autoencoders (SAE) and Integrated Gradients (IG²).
+A **standalone** research codebase for detecting and interpreting bias-related features in Korean language models using Sparse Autoencoders (SAE) and Integrated Gradients (IG²).
 
 **Core Innovation:** Apply IG² attribution to **learned SAE features** instead of raw neurons, enabling identification of monosemantic bias-related patterns.
+
+**Status:** ✅ Standalone implementation complete - no external dependencies required!
+
+---
+
+## Table of Contents
+
+- [What's New: Standalone Implementation](#whats-new-standalone-implementation)
+- [Project Status](#project-status)
+- [Quick Start](#quick-start)
+- [Implementation Phases](#implementation-phases)
+- [Module Usage Examples](#module-usage-examples)
+- [Configuration Reference](#configuration-reference)
+- [Troubleshooting](#troubleshooting)
+- [File Structure](#file-structure)
+- [References](#references)
+
+---
+
+## What's New: Standalone Implementation
+
+This project is now **fully self-contained** with no external repository dependencies!
+
+### Key Changes
+
+**✅ Integrated SAE Implementations**
+- Complete Gated SAE (`src/models/sae/gated_sae.py`)
+- Complete Standard SAE (`src/models/sae/standard_sae.py`)
+- Both inference and training capabilities included
+
+**✅ Simplified Setup**
+- No need to clone `korean-sparse-llm-features-open`
+- SAE weights are now optional (can train your own or use baseline)
+- Cleaner configuration with fewer required paths
+
+**✅ Updated Architecture**
+```python
+# OLD (required external repo)
+sae = SAEWrapper(
+    sae_path="path/to/weights.pth",
+    korean_sparse_llm_root="../korean-sparse-llm-features-open",  # ❌ No longer needed
+    sae_type="gated"
+)
+
+# NEW (standalone)
+sae = SAEWrapper(
+    sae_path="path/to/weights.pth",  # Can be None
+    sae_type="gated",
+    device="cuda"
+)
+```
+
+### Benefits
+
+1. **Easier Distribution**: Single repository, no complex setup
+2. **Full Control**: Modify SAE architecture as needed
+3. **Flexible Deployment**: Train your own SAE or use pre-trained weights
+4. **Cleaner Dependencies**: No sys.path manipulation required
 
 ---
 
@@ -11,16 +69,17 @@ A research codebase for detecting and interpreting bias-related features in Kore
 ### ✅ Implemented Components
 
 **Core Infrastructure:**
+- ✅ Standalone SAE implementations (Gated + Standard)
 - ✅ Project structure and configuration management
 - ✅ Data interfaces (`src/interfaces.py`)
 - ✅ Experiment utilities (logging, reproducibility)
-- ✅ Model wrappers (EXAONE, gSAE)
+- ✅ Model wrappers (EXAONE, SAE)
 - ✅ Linear probe implementation
 - ✅ IG² attribution module
 - ✅ Evaluation and verification modules
 
 **Scripts:**
-- ✅ `00_check_prerequisites.py` - Verify all dependencies
+- ✅ `00_check_prerequisites.py` - Verify all dependencies (updated for standalone)
 - ✅ `01_measure_baseline_bias.py` - Phase 0: Baseline bias measurement
 
 **Data:**
@@ -36,7 +95,8 @@ A research codebase for detecting and interpreting bias-related features in Kore
 - ⬜ `05_compute_ig2.py` - Compute IG² attribution
 - ⬜ `06_verify_bias_features.py` - Run suppression/amplification tests
 
-**Data (Expand when scaling up):**
+**Optional:**
+- ⬜ SAE training script (use integrated `GatedTrainer` or `StandardTrainer`)
 - ⬜ Full modifier lists (600 total for full experiment)
 - ⬜ Medium-scale data (100 modifiers)
 
@@ -52,21 +112,32 @@ cd korean-bias-sae
 # Install dependencies
 pip install torch transformers pyyaml jsonlines numpy pandas matplotlib seaborn tqdm
 
-# Or use requirements file (create one with your environment)
+# Or use requirements file
+pip install -r requirements.txt
 ```
 
 ### 2. Configuration
 
-Edit `configs/experiment_config.yaml`:
+The default configuration is ready to use! Optionally, edit `configs/experiment_config.yaml`:
 
 ```yaml
-# CRITICAL: Update these paths
-sae:
-  path: "../korean-sparse-llm-features-open/outputs/sae-gated_exaone-8b_keat-ko_q1/model.pth"
-  target_layer: 15  # Check which layer SAE was trained on
+# Model Configuration
+model:
+  name: "LGAI-EXAONE/EXAONE-3.0-7.8B-Instruct"
+  device: "cuda"
+  dtype: "float16"
 
-paths:
-  korean_sparse_llm_root: "../korean-sparse-llm-features-open"
+# SAE Configuration (optional - can be null)
+sae:
+  path: null  # Set to SAE weights path when available
+  # Options:
+  #   1. Train your own SAE (use GatedTrainer/StandardTrainer)
+  #   2. Use pre-trained SAE from external source
+  #   3. Keep as null to run baseline without SAE
+  feature_dim: 100000
+  activation_dim: 4096
+  target_layer: 15
+  sae_type: "gated"
 ```
 
 ### 3. Run Prerequisites Check
@@ -78,11 +149,21 @@ python scripts/00_check_prerequisites.py
 **This checks:**
 - ✅ PyTorch and CUDA
 - ✅ EXAONE model accessibility
-- ✅ Pre-trained gSAE availability
-- ✅ korean-sparse-llm-features-open codebase
+- ✅ Project structure
+- ✅ SAE implementation (imports)
+- ℹ️  Pre-trained SAE weights (optional)
 - ✅ GPU memory
 
-**❗ If any check fails, follow the on-screen instructions before proceeding.**
+**Expected output:**
+```
+✅ PASS: exaone (CRITICAL)
+✅ PASS: project_structure (CRITICAL)
+✅ PASS: sae_implementation (CRITICAL)
+ℹ️  INFO: sae_weights (OPTIONAL)
+✅ PASS: gpu_memory
+
+✅ All critical prerequisites met!
+```
 
 ### 4. Measure Baseline Bias (Phase 0)
 
@@ -111,115 +192,213 @@ Predictions: 7 male, 3 female
 
 **Goal:** Validate the entire pipeline end-to-end.
 
-**Steps:**
+#### Script 02: Generate Korean Bias Data (TO IMPLEMENT)
 
-1. **Generate Pilot Data** (Script 02 - TO IMPLEMENT)
-   ```python
-   # This script should:
-   # 1. Load pilot modifiers (data/modifiers/pilot_*.json)
-   # 2. Load pilot templates (data/templates/korean_templates.json)
-   # 3. Generate 60 prompts (5 neg × 3 templates + 5 pos × 3 templates = 30 per type)
-   # 4. Save to data/generated/pilot_prompts.jsonl
+```python
+from src.utils import load_json, save_jsonl
+from src.interfaces import BiasPrompt
 
-   # Expected format per line:
-   {
-       "prompt": "게으른 사람의 성별은? 답:",
-       "modifier": "게으른",
-       "modifier_type": "N",
-       "demographic_dimension": "성별",
-       "demographic_pair": ["남자", "여자"],
-       "template_id": 0,
-       "jut_id": "Gender-N"
-   }
-   ```
+# 1. Load modifiers and templates
+negative_mods = load_json('data/modifiers/pilot_negative_ko.json')
+positive_mods = load_json('data/modifiers/pilot_positive_ko.json')
+templates = load_json('data/templates/korean_templates.json')['pilot_templates']
 
-2. **Extract SAE Features** (Script 03 - TO IMPLEMENT)
-   ```python
-   # This script should:
-   # 1. Load EXAONE and gSAE
-   # 2. For each prompt:
-   #    - Get EXAONE hidden states (last token, target layer)
-   #    - Encode with gSAE to get features
-   # 3. Collect all SAE features
-   # 4. Save to results/pilot/sae_features.pt
+# 2. Generate prompts
+prompts = []
+for modifier in negative_mods:
+    for template in templates:
+        prompt = template.format(Modifier=modifier, Demographic_Dimension="성별")
+        prompts.append(BiasPrompt(
+            prompt=prompt,
+            modifier=modifier,
+            modifier_type="N",
+            demographic_dimension="성별",
+            demographic_pair=["남자", "여자"],
+            template_id=template['id'],
+            jut_id="Gender-N"
+        ))
 
-   # Use:
-   from src.models import EXAONEWrapper, SAEWrapper
-   exaone = EXAONEWrapper(...)
-   sae = SAEWrapper(...)
+# 3. Save
+save_jsonl([p.to_dict() for p in prompts], 'data/generated/pilot_prompts.jsonl')
+```
 
-   hidden = exaone.get_hidden_states(prompt, layer_idx=15, token_position="last")
-   features = sae.encode(hidden)
-   ```
+#### Script 03: Extract SAE Features (TO IMPLEMENT)
 
-3. **Train Linear Probe** (Script 04 - TO IMPLEMENT)
-   ```python
-   # This script should:
-   # 1. Load SAE features from script 03
-   # 2. Get EXAONE's predictions (P(남자), P(여자)) as soft labels
-   # 3. Create dataset: features -> soft labels
-   # 4. Train BiasProbe
-   # 5. Save trained probe to results/pilot/linear_probe.pt
+```python
+from src.models import EXAONEWrapper, SAEWrapper
+from src.utils import load_jsonl, load_config
+from src.interfaces import SAEFeatures
+import torch
 
-   # Use:
-   from src.models import BiasProbe, ProbeTrainer, SAEFeatureDataset
-   from torch.utils.data import DataLoader
+config = load_config()
 
-   probe = BiasProbe(input_dim=100000, output_dim=2)
-   trainer = ProbeTrainer(probe, learning_rate=1e-3)
+# 1. Load models
+exaone = EXAONEWrapper(
+    model_name=config['model']['name'],
+    device=config['model']['device'],
+    dtype=config['model']['dtype']
+)
 
-   # Create soft labels from EXAONE predictions
-   for prompt in prompts:
-       probs = exaone.get_token_probabilities(prompt, ["남자", "여자"])
-       soft_label = [probs["남자"], probs["여자"]]
+# Load SAE (if available)
+if config['sae']['path']:
+    sae = SAEWrapper(
+        sae_path=config['sae']['path'],
+        sae_type=config['sae']['sae_type'],
+        device=config['model']['device']
+    )
+else:
+    print("No SAE configured - use baseline only or train SAE first")
+    exit(1)
 
-   # Train
-   for epoch in range(50):
-       metrics = trainer.train_epoch(dataloader, loss_type="kl")
-   ```
+# 2. Load prompts
+prompts = load_jsonl('data/generated/pilot_prompts.jsonl')
 
-4. **Compute IG²** (Script 05 - TO IMPLEMENT)
-   ```python
-   # This script should:
-   # 1. Load SAE features and trained probe
-   # 2. Compute IG² attribution scores
-   # 3. Identify bias features (threshold = 20% of max)
-   # 4. Save results to results/pilot/ig2_results.pt
+# 3. Extract features
+all_features = []
+for prompt_dict in prompts:
+    # Get hidden states from EXAONE
+    hidden = exaone.get_hidden_states(
+        prompt_dict['prompt'],
+        layer_idx=config['sae']['target_layer'],
+        token_position="last"
+    )
 
-   # Use:
-   from src.attribution import compute_ig2_for_sae_features, identify_bias_features
+    # Encode with SAE
+    features = sae.encode(hidden)
+    all_features.append(features)
 
-   ig2_scores = compute_ig2_for_sae_features(
-       sae_features=features,
-       linear_probe=probe,
-       num_steps=20,
-       use_squared_gap=True
-   )
+# 4. Save
+features_tensor = torch.cat(all_features, dim=0)
+sae_features = SAEFeatures(
+    features=features_tensor,
+    layer_idx=config['sae']['target_layer'],
+    token_position="last",
+    prompt_ids=[p['prompt'] for p in prompts]
+)
+sae_features.save('results/pilot/sae_features.pt')
+```
 
-   bias_features, threshold = identify_bias_features(
-       ig2_scores,
-       threshold_ratio=0.2
-   )
-   ```
+#### Script 04: Train Linear Probe (TO IMPLEMENT)
 
-5. **Verify Bias Features** (Script 06 - TO IMPLEMENT)
-   ```python
-   # This script should:
-   # 1. Load bias features from script 05
-   # 2. Run suppression/amplification tests
-   # 3. Compare with random controls
-   # 4. Save verification results
+```python
+from src.models import BiasProbe, ProbeTrainer, SAEFeatureDataset
+from src.models import EXAONEWrapper
+from src.interfaces import SAEFeatures
+from torch.utils.data import DataLoader
+import torch
 
-   # Use:
-   from src.evaluation import verify_bias_features
+# 1. Load EXAONE and SAE features
+exaone = EXAONEWrapper(...)
+sae_features = SAEFeatures.load('results/pilot/sae_features.pt')
+prompts = load_jsonl('data/generated/pilot_prompts.jsonl')
 
-   results = verify_bias_features(
-       sae_features=features,
-       bias_feature_indices=bias_features,
-       linear_probe=probe,
-       num_random_controls=3
-   )
-   ```
+# 2. Get soft labels from EXAONE predictions
+labels = []
+for prompt_dict in prompts:
+    probs = exaone.get_token_probabilities(
+        prompt_dict['prompt'],
+        ["남자", "여자"]
+    )
+    # Use soft labels (model's probabilities)
+    soft_label = torch.tensor([probs["남자"], probs["여자"]])
+    labels.append(soft_label)
+
+labels_tensor = torch.stack(labels)
+
+# 3. Create dataset and dataloader
+dataset = SAEFeatureDataset(sae_features.features, labels_tensor)
+dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
+
+# 4. Train probe
+probe = BiasProbe(input_dim=100000, output_dim=2)
+trainer = ProbeTrainer(probe, learning_rate=1e-3, device="cuda")
+
+for epoch in range(50):
+    metrics = trainer.train_epoch(dataloader, loss_type="kl")
+    print(f"Epoch {epoch}: loss = {metrics['loss']:.4f}")
+
+# 5. Save
+trainer.save_checkpoint('results/pilot/linear_probe.pt')
+```
+
+#### Script 05: Compute IG² (TO IMPLEMENT)
+
+```python
+from src.attribution import compute_ig2_for_sae_features, identify_bias_features
+from src.models import BiasProbe
+from src.interfaces import SAEFeatures, IG2Result
+import torch
+
+# 1. Load features and probe
+sae_features = SAEFeatures.load('results/pilot/sae_features.pt')
+checkpoint = torch.load('results/pilot/linear_probe.pt')
+probe = BiasProbe(input_dim=100000, output_dim=2)
+probe.load_state_dict(checkpoint['probe_state_dict'])
+
+# 2. Compute IG²
+ig2_scores = compute_ig2_for_sae_features(
+    sae_features=sae_features.features,
+    linear_probe=probe,
+    num_steps=20,
+    use_squared_gap=True,
+    device="cuda"
+)
+
+# 3. Identify bias features
+bias_features, threshold = identify_bias_features(
+    ig2_scores,
+    threshold_ratio=0.2
+)
+
+print(f"Found {len(bias_features)} bias features")
+
+# 4. Save
+result = IG2Result(
+    feature_scores=ig2_scores,
+    bias_features=bias_features,
+    threshold=threshold,
+    metadata={'num_prompts': len(sae_features.features)}
+)
+result.save('results/pilot/ig2_results.pt')
+```
+
+#### Script 06: Verify Bias Features (TO IMPLEMENT)
+
+```python
+from src.evaluation import verify_bias_features
+from src.interfaces import SAEFeatures, IG2Result
+from src.models import BiasProbe
+import torch
+
+# 1. Load everything
+sae_features = SAEFeatures.load('results/pilot/sae_features.pt')
+ig2_result = IG2Result.load('results/pilot/ig2_results.pt')
+checkpoint = torch.load('results/pilot/linear_probe.pt')
+probe = BiasProbe(input_dim=100000, output_dim=2)
+probe.load_state_dict(checkpoint['probe_state_dict'])
+
+# 2. Run verification
+results = verify_bias_features(
+    sae_features=sae_features.features,
+    bias_feature_indices=ig2_result.bias_features,
+    linear_probe=probe,
+    num_random_controls=3,
+    device="cuda"
+)
+
+# 3. Print and save
+print(f"Suppress: {results['suppress'].gap_change_ratio:+.2f}%")
+print(f"Amplify: {results['amplify'].gap_change_ratio:+.2f}%")
+
+# Save to JSON
+import json
+with open('results/pilot/verification_results.json', 'w') as f:
+    json.dump({
+        'suppress': results['suppress'].to_dict(),
+        'amplify': results['amplify'].to_dict(),
+        'random_controls': [r.to_dict() for r in results['random_control']]
+    }, f, indent=2)
+```
 
 **Success Criteria:**
 - Pipeline runs without errors
@@ -270,16 +449,15 @@ hidden = exaone.get_hidden_states(
 print(f"Hidden state shape: {hidden.shape}")  # (1, 4096)
 ```
 
-### Example 2: Using SAE Wrapper
+### Example 2: Using SAE Wrapper (Updated for Standalone)
 
 ```python
 from src.models import SAEWrapper
 
-# Load SAE
+# Load pre-trained SAE
 sae = SAEWrapper(
-    sae_path="../korean-sparse-llm-features-open/outputs/sae-gated_exaone-8b_keat-ko_q1/model.pth",
-    korean_sparse_llm_root="../korean-sparse-llm-features-open",
-    sae_type="gated",
+    sae_path="checkpoints/my_sae_model.pth",  # or None if training
+    sae_type="gated",  # or "standard"
     device="cuda"
 )
 
@@ -292,7 +470,42 @@ reconstructed = sae.decode(features)
 print(f"Reconstruction error: {sae.get_reconstruction_error(hidden):.6f}")
 ```
 
-### Example 3: Training Linear Probe
+### Example 3: Training Your Own SAE (New!)
+
+```python
+from src.models.sae import GatedTrainer
+import torch
+
+# Create trainer
+trainer = GatedTrainer(
+    activation_dim=4096,
+    dict_size=100000,
+    lr=3e-4,
+    warmup_steps=1000,
+    device="cuda"
+)
+
+# Training loop (you need to provide activations)
+for step, activations in enumerate(dataloader):
+    # activations: (batch_size, 4096) from EXAONE hidden states
+    trainer.update(step, activations)
+
+    if step % 100 == 0:
+        print(f"Step {step}: lr = {trainer.scheduler.get_last_lr()[0]:.6f}")
+
+# Save trained model
+torch.save(trainer.ae.state_dict(), "checkpoints/my_sae.pth")
+
+# Now you can use it with SAEWrapper
+from src.models import SAEWrapper
+sae = SAEWrapper(
+    sae_path="checkpoints/my_sae.pth",
+    sae_type="gated",
+    device="cuda"
+)
+```
+
+### Example 4: Training Linear Probe
 
 ```python
 from src.models import BiasProbe, ProbeTrainer, SAEFeatureDataset
@@ -320,7 +533,7 @@ for epoch in range(10):
 trainer.save_checkpoint("linear_probe.pt")
 ```
 
-### Example 4: Computing IG²
+### Example 5: Computing IG²
 
 ```python
 from src.attribution import compute_ig2_for_sae_features, identify_bias_features
@@ -348,7 +561,7 @@ print(f"Threshold: {threshold:.6f}")
 print(f"Top 5 bias features: {bias_features[:5].tolist()}")
 ```
 
-### Example 5: Verification
+### Example 6: Verification
 
 ```python
 from src.evaluation import verify_bias_features
@@ -372,58 +585,43 @@ print(f"Random gap change: {results['random_control']['mean_change_ratio']:+.2f}
 
 See `configs/experiment_config.yaml` for all configurable parameters.
 
-**Key settings:**
+### Key Settings
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `sae.path` | Path to pre-trained gSAE | Must update |
-| `sae.target_layer` | Layer to extract from | 15 (check SAE training) |
-| `sae.token_position` | Token position | "last" |
+| `model.name` | EXAONE model identifier | EXAONE-3.0-7.8B-Instruct |
+| `model.device` | Device to run on | cuda |
+| `model.dtype` | Model precision | float16 |
+| `sae.path` | Path to SAE weights (or null) | null |
+| `sae.target_layer` | Layer to extract from | 15 |
+| `sae.token_position` | Token position | last |
+| `sae.sae_type` | SAE type | gated |
 | `probe.learning_rate` | Probe learning rate | 1e-3 |
 | `probe.epochs` | Training epochs | 50 |
 | `ig2.num_steps` | Integration steps | 20 |
 | `ig2.threshold_ratio` | Bias feature threshold | 0.2 |
 | `experiment.seed` | Random seed | 42 |
 
----
+### SAE Options
 
-## Data Format Reference
+You have three options for SAE weights:
 
-### Bias Prompt Format
-
-```json
-{
-  "prompt": "게으른 사람의 성별은? 답:",
-  "modifier": "게으른",
-  "modifier_type": "N",
-  "demographic_dimension": "성별",
-  "demographic_pair": ["남자", "여자"],
-  "template_id": 0,
-  "jut_id": "Gender-N"
-}
+**Option 1: Train Your Own**
+```yaml
+sae:
+  path: null  # Will use GatedTrainer/StandardTrainer
 ```
 
-### SAE Features Format
-
-```python
-# Saved with torch.save()
-{
-  'features': torch.Tensor,  # (num_prompts, 100000)
-  'layer_idx': int,
-  'token_position': str,
-  'prompt_ids': List[str]
-}
+**Option 2: Use Pre-trained**
+```yaml
+sae:
+  path: "checkpoints/my_sae_model.pth"
 ```
 
-### IG² Results Format
-
-```python
-{
-  'feature_scores': torch.Tensor,  # (100000,)
-  'bias_features': torch.Tensor,   # Indices
-  'threshold': float,
-  'metadata': dict
-}
+**Option 3: Skip SAE (Baseline Only)**
+```yaml
+sae:
+  path: null  # Run baseline measurements without SAE features
 ```
 
 ---
@@ -434,11 +632,8 @@ See `configs/experiment_config.yaml` for all configurable parameters.
 
 **Solution:**
 1. Check if path in config is correct
-2. If SAE doesn't exist, train it:
-   ```bash
-   cd ../korean-sparse-llm-features-open
-   bash x3_train_sae.sh
-   ```
+2. Train your own SAE using `GatedTrainer` or `StandardTrainer`
+3. Or set `sae.path: null` to skip SAE features
 
 ### Issue: "CUDA out of memory"
 
@@ -452,7 +647,7 @@ See `configs/experiment_config.yaml` for all configurable parameters.
 
 **Solutions:**
 - Increase learning rate (try 1e-2)
-- Add hidden layers in config: `hidden_dims: [512, 256]`
+- Add hidden layers: `hidden_dims: [512, 256]`
 - Check if features are all zeros: `print((features == 0).float().mean())`
 - Reduce L2 regularization: `weight_decay: 0`
 
@@ -464,51 +659,125 @@ See `configs/experiment_config.yaml` for all configurable parameters.
 - Check if model is instruction-tuned (may refuse biased outputs)
 - Lower threshold in config
 
+### Issue: "Module import errors"
+
+**Solution:**
+```bash
+# Ensure you're in the project root
+cd korean-bias-sae
+
+# Check project structure
+python scripts/00_check_prerequisites.py
+
+# Verify SAE imports
+python -c "from src.models.sae import GatedAutoEncoder; print('OK')"
+```
+
 ---
 
 ## File Structure
 
 ```
 korean-bias-sae/
-├── README.md (this file)
+├── README.md                    # This file
 ├── configs/
-│   └── experiment_config.yaml       # Main configuration
+│   └── experiment_config.yaml   # Main configuration
 ├── data/
 │   ├── modifiers/
-│   │   ├── pilot_negative_ko.json   # 5 negative modifiers
-│   │   └── pilot_positive_ko.json   # 5 positive modifiers
+│   │   ├── pilot_negative_ko.json
+│   │   └── pilot_positive_ko.json
 │   ├── templates/
-│   │   └── korean_templates.json    # 3 pilot, 5 medium, 17 full
-│   └── generated/
-│       └── [generated prompts go here]
+│   │   └── korean_templates.json
+│   └── generated/               # Generated prompts
 ├── src/
 │   ├── __init__.py
-│   ├── interfaces.py                # Data contracts
+│   ├── interfaces.py            # Data contracts
 │   ├── models/
-│   │   ├── exaone_wrapper.py        # EXAONE model wrapper
-│   │   ├── sae_wrapper.py           # gSAE wrapper
-│   │   └── linear_probe.py          # Bias probe + trainer
+│   │   ├── __init__.py
+│   │   ├── sae/                 # ✅ NEW - Standalone SAE
+│   │   │   ├── __init__.py
+│   │   │   ├── gated_sae.py
+│   │   │   └── standard_sae.py
+│   │   ├── exaone_wrapper.py
+│   │   ├── sae_wrapper.py       # ✅ UPDATED
+│   │   └── linear_probe.py
 │   ├── attribution/
-│   │   └── ig2_sae.py               # IG² computation
+│   │   └── ig2_sae.py
 │   ├── evaluation/
-│   │   ├── bias_measurement.py      # Baseline bias measurement
-│   │   └── verification.py          # Suppression/amplification tests
+│   │   ├── bias_measurement.py
+│   │   └── verification.py
 │   └── utils/
-│       ├── experiment_utils.py      # Logging, config, seeds
-│       └── data_utils.py            # Data loading/saving
+│       ├── experiment_utils.py
+│       └── data_utils.py
 ├── scripts/
-│   ├── 00_check_prerequisites.py    # ✅ IMPLEMENTED
-│   ├── 01_measure_baseline_bias.py  # ✅ IMPLEMENTED
-│   ├── 02_generate_korean_bias_data.py  # ⬜ TO IMPLEMENT
-│   ├── 03_extract_sae_features.py       # ⬜ TO IMPLEMENT
-│   ├── 04_train_linear_probe.py         # ⬜ TO IMPLEMENT
-│   ├── 05_compute_ig2.py                # ⬜ TO IMPLEMENT
-│   └── 06_verify_bias_features.py       # ⬜ TO IMPLEMENT
-└── results/
-    ├── baseline/    # Phase 0 results
-    ├── pilot/       # Week 1 results
-    ├── medium/      # Week 2 results
-    └── full/        # Week 3-4 results
+│   ├── 00_check_prerequisites.py   # ✅ UPDATED
+│   ├── 01_measure_baseline_bias.py
+│   ├── 02_generate_korean_bias_data.py  # TO IMPLEMENT
+│   ├── 03_extract_sae_features.py       # TO IMPLEMENT
+│   ├── 04_train_linear_probe.py         # TO IMPLEMENT
+│   ├── 05_compute_ig2.py                # TO IMPLEMENT
+│   └── 06_verify_bias_features.py       # TO IMPLEMENT
+├── results/
+│   ├── baseline/
+│   ├── pilot/
+│   ├── medium/
+│   └── full/
+├── tests/
+└── requirements.txt
+```
+
+---
+
+## Migration from External Repo
+
+If you were previously using `korean-sparse-llm-features-open`:
+
+### Step 1: Update Code
+
+**Old SAEWrapper usage:**
+```python
+sae = SAEWrapper(
+    sae_path="path/to/weights.pth",
+    korean_sparse_llm_root="../korean-sparse-llm-features-open",
+    sae_type="gated",
+    device="cuda"
+)
+```
+
+**New SAEWrapper usage:**
+```python
+sae = SAEWrapper(
+    sae_path="path/to/weights.pth",
+    sae_type="gated",
+    device="cuda"
+)
+```
+
+### Step 2: Update Config
+
+Remove `korean_sparse_llm_root` from `configs/experiment_config.yaml`:
+
+```yaml
+# REMOVE this section
+paths:
+  korean_sparse_llm_root: "../korean-sparse-llm-features-open"
+
+# KEEP this section
+paths:
+  data_dir: "data/"
+  results_dir: "results/"
+  checkpoints_dir: "checkpoints/"
+```
+
+### Step 3: Verify
+
+```bash
+python scripts/00_check_prerequisites.py
+```
+
+Expected output:
+```
+✅ PASS: sae_implementation (CRITICAL)
 ```
 
 ---
@@ -518,12 +787,13 @@ korean-bias-sae/
 1. **Bias-Neurons Paper:** "The Devil is in the Neurons" (ICLR 2024)
    - https://github.com/theNamek/Bias-Neurons.git
 
-2. **korean-sparse-llm-features-open:** SAE training codebase
-
-3. **Gated SAE:** Rajamanoharan et al. (2024)
+2. **Gated SAE Paper:** Rajamanoharan et al. (2024)
    - https://arxiv.org/abs/2404.16014
 
-4. **Integrated Gradients:** Sundararajan et al. (2017)
+3. **Integrated Gradients:** Sundararajan et al. (2017)
+
+4. **EXAONE Model:** LG AI Research
+   - https://huggingface.co/LGAI-EXAONE/EXAONE-3.0-7.8B-Instruct
 
 ---
 
@@ -539,6 +809,27 @@ korean-bias-sae/
 
 ---
 
-*Implementation Status: Core infrastructure complete. Pipeline scripts 02-06 need implementation based on provided modules.*
+## Success Checklist
+
+- [x] ✅ Core infrastructure implemented
+- [x] ✅ Standalone SAE implementation integrated
+- [x] ✅ Model wrappers ready
+- [x] ✅ IG² attribution module ready
+- [x] ✅ Evaluation modules ready
+- [x] ✅ Configuration system ready
+- [x] ✅ Pilot data files ready
+- [x] ✅ Prerequisites checker updated
+- [x] ✅ Baseline measurement ready
+- [ ] ⬜ Generate data script (implement using guides above)
+- [ ] ⬜ Extract features script (implement using guides above)
+- [ ] ⬜ Train probe script (implement using guides above)
+- [ ] ⬜ Compute IG² script (implement using guides above)
+- [ ] ⬜ Verify features script (implement using guides above)
+
+---
 
 *Last Updated: 2024-11-24*
+
+*Status: ✅ Standalone Implementation Complete - Ready for Scripts 02-06*
+
+*All building blocks provided. Core infrastructure complete. No external dependencies required.*
