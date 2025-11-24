@@ -5,7 +5,6 @@ Sparse Autoencoder (SAE) wrapper for feature extraction.
 import torch
 import torch.nn as nn
 from pathlib import Path
-import sys
 import logging
 
 logger = logging.getLogger(__name__)
@@ -13,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 class SAEWrapper:
     """
-    Wrapper for gSAE (Gated Sparse Autoencoder) from korean-sparse-llm-features-open.
+    Wrapper for gSAE (Gated Sparse Autoencoder).
 
     Provides convenient methods for:
     - Loading pre-trained gSAE
@@ -24,7 +23,6 @@ class SAEWrapper:
     def __init__(
         self,
         sae_path: str,
-        korean_sparse_llm_root: str,
         sae_type: str = "gated",
         device: str = "cuda"
     ):
@@ -33,28 +31,21 @@ class SAEWrapper:
 
         Args:
             sae_path: Path to pre-trained SAE weights
-            korean_sparse_llm_root: Root directory of korean-sparse-llm-features-open
             sae_type: 'gated' or 'standard'
             device: Device to load SAE on
         """
         self.sae_path = Path(sae_path)
-        self.korean_sparse_llm_root = Path(korean_sparse_llm_root)
         self.sae_type = sae_type
         self.device = device
 
-        # Add korean-sparse-llm-features-open to path
-        if str(self.korean_sparse_llm_root) not in sys.path:
-            sys.path.insert(0, str(self.korean_sparse_llm_root))
-            sys.path.insert(0, str(self.korean_sparse_llm_root / 'lib'))
-
         logger.info(f"Loading {sae_type} SAE from: {sae_path}")
 
-        # Import SAE module
+        # Import SAE module from local implementation
         if sae_type == "gated":
-            from lib.models.gated_sae import GatedAutoEncoder
+            from .sae import GatedAutoEncoder
             self.sae = GatedAutoEncoder.from_pretrained(str(self.sae_path), device=device)
         elif sae_type == "standard":
-            from lib.models.standard_sae import AutoEncoder
+            from .sae import AutoEncoder
             self.sae = AutoEncoder.from_pretrained(str(self.sae_path), device=device)
         else:
             raise ValueError(f"Invalid sae_type: {sae_type}. Must be 'gated' or 'standard'")
