@@ -20,6 +20,7 @@ import json
 import torch
 from src.utils.experiment_utils import load_config, set_seed, ExperimentLogger
 from src.utils.data_utils import save_json
+from src.utils.prompt_generation import generate_stage_prompts
 from src.models import EXAONEWrapper
 from src.evaluation import measure_baseline_bias
 
@@ -46,6 +47,8 @@ def main():
     parser.add_argument('--stage', type=str, default='pilot',
                         choices=['pilot', 'medium', 'full'],
                         help='Experiment stage')
+    parser.add_argument('--sample-size', type=int, default=None,
+                        help='Number of prompts to sample (default: all prompts)')
     args = parser.parse_args()
 
     # Load config
@@ -83,9 +86,30 @@ def main():
     if args.stage == 'pilot':
         test_prompts = PILOT_PROMPTS
     else:
-        # For medium/full, you would generate or load more prompts
-        logger.warning(f"Stage '{args.stage}' not fully implemented yet, using pilot prompts")
-        test_prompts = PILOT_PROMPTS
+        # For medium/full, generate prompts from templates and modifiers
+        logger.info(f"\nGenerating prompts for stage '{args.stage}'...")
+        try:
+            test_prompts = generate_stage_prompts(
+                stage=args.stage,
+                data_dir=config['paths']['data_dir'],
+                demographic_dimension=config['data']['demographic']
+            )
+        except FileNotFoundError as e:
+            logger.error(f"❌ Missing data files for stage '{args.stage}': {e}")
+            logger.error("Make sure you have created the modifier files in data/modifiers/")
+            return 1
+        except Exception as e:
+            logger.error(f"❌ Error generating prompts: {e}")
+            import traceback
+            traceback.print_exc()
+            return 1
+
+    # Sample prompts if requested
+    if args.sample_size is not None and len(test_prompts) > args.sample_size:
+        import random
+        logger.info(f"Sampling {args.sample_size} prompts from {len(test_prompts)} total prompts...")
+        random.seed(config['experiment']['seed'])
+        test_prompts = random.sample(test_prompts, args.sample_size)
 
     logger.info(f"\nTesting on {len(test_prompts)} prompts...")
 

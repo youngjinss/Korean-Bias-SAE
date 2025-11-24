@@ -72,6 +72,12 @@ def check_exaone_model(config):
         print(f"   Test tokenization: '{test_text}'")
         print(f"   Token count: {tokens['input_ids'].shape[1]}")
 
+        # Test demographic token encoding (with leading space)
+        test_tokens = [" 남자", " 여자"]
+        for token in test_tokens:
+            token_ids = tokenizer.encode(token, add_special_tokens=False)
+            print(f"   '{token}' → token ID: {token_ids} (length: {len(token_ids)})")
+
         # Check if model can be loaded (metadata only, don't load weights)
         print("\nChecking model availability (not loading weights)...")
         try:
@@ -189,6 +195,8 @@ def check_project_structure():
         'src/utils',
         'configs',
         'data',
+        'data/modifiers',
+        'data/templates',
         'scripts',
     ]
 
@@ -205,6 +213,64 @@ def check_project_structure():
         print("✅ Project structure correct")
     else:
         print("❌ Some directories missing")
+
+    return all_exist
+
+
+def check_data_files():
+    """Check that required data files exist"""
+    print("=" * 60)
+    print("Checking Data Files...")
+    print("=" * 60)
+
+    stages = ['pilot', 'medium', 'full']
+    modifier_types = ['negative', 'positive']
+
+    # Check templates
+    templates_file = Path('data/templates/korean_templates.json')
+    if templates_file.exists():
+        print(f"  ✅ {templates_file}")
+        try:
+            import json
+            with open(templates_file, 'r', encoding='utf-8') as f:
+                templates_data = json.load(f)
+            print(f"     Templates found:")
+            for stage in stages:
+                key = f"{stage}_templates"
+                if key in templates_data:
+                    count = len(templates_data[key])
+                    print(f"       - {stage}: {count} templates")
+        except Exception as e:
+            print(f"     ⚠️  Error reading templates: {e}")
+    else:
+        print(f"  ❌ {templates_file} not found")
+        return False
+
+    # Check modifiers for each stage
+    print(f"\n  Modifiers:")
+    all_exist = True
+    for stage in stages:
+        for mod_type in modifier_types:
+            modifier_file = Path(f'data/modifiers/{stage}_{mod_type}_ko.json')
+            if modifier_file.exists():
+                try:
+                    import json
+                    with open(modifier_file, 'r', encoding='utf-8') as f:
+                        modifiers = json.load(f)
+                    print(f"    ✅ {stage}_{mod_type}: {len(modifiers)} adjectives")
+                except Exception as e:
+                    print(f"    ⚠️  {stage}_{mod_type}: Error reading - {e}")
+            else:
+                print(f"    ❌ {stage}_{mod_type}: Not found")
+                if stage != 'pilot':  # Pilot uses hardcoded prompts, so optional
+                    all_exist = False
+
+    print()
+    if all_exist:
+        print("✅ All required data files present")
+    else:
+        print("⚠️  Some data files missing (medium/full stages won't work)")
+        print("   Run: python scripts/translate_bias_neurons_vocab.py")
 
     return all_exist
 
@@ -258,6 +324,7 @@ def main():
     results['pytorch_cuda'] = check_pytorch_cuda()
     results['exaone'], tokenizer = check_exaone_model(config)
     results['project_structure'] = check_project_structure()
+    results['data_files'] = check_data_files()
     results['sae_implementation'] = check_sae_implementation()
     results['sae_weights'] = check_sae_weights(config)
     results['gpu_memory'] = check_gpu_memory(min_gb=14)  # Slightly lower threshold
@@ -268,7 +335,7 @@ def main():
     print("=" * 60)
 
     all_pass = True
-    critical_checks = ['exaone', 'project_structure', 'sae_implementation']
+    critical_checks = ['exaone', 'project_structure', 'data_files', 'sae_implementation']
     optional_checks = ['sae_weights']
 
     for check, passed in results.items():
