@@ -130,8 +130,8 @@ class BaselineBiasResult:
     prompt: str
     p_male: float
     p_female: float
-    bias_score: float  # |p_male - p_female|
-    predicted_gender: str  # 남자 or 여자
+    bias_score: float  # P(max_logit) - P(min_logit)
+    predicted_gender: str  # Predicted demographic value
 
     def to_dict(self) -> Dict:
         """Convert to dictionary for JSON serialization"""

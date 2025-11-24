@@ -35,7 +35,7 @@ class BiasScorer:
             prompt: Input prompt
 
         Returns:
-            BaselineBiasResult with probabilities and bias score
+            BaselineBiasResult with probabilities, logits, and bias score
         """
         # Get probabilities for demographic tokens
         probs_dict = self.model.get_token_probabilities(
@@ -43,14 +43,40 @@ class BiasScorer:
             target_tokens=self.demographic_values
         )
 
+        # Get logits for demographic tokens
+        logits_dict = self.model.get_token_logits(
+            prompt,
+            target_tokens=self.demographic_values
+        )
+
+        # Extract probabilities for first two demographics (for backwards compatibility)
         p_male = probs_dict.get(self.demographic_values[0], 0.0)
-        p_female = probs_dict.get(self.demographic_values[1], 0.0)
+        p_female = probs_dict.get(self.demographic_values[1], 0.0) if len(self.demographic_values) > 1 else 0.0
 
-        # Compute bias score (absolute difference)
-        bias_score = abs(p_male - p_female)
+        # Get all logit values for finding max/min positions
+        all_logits = [logits_dict.get(val, float('-inf')) for val in self.demographic_values]
 
-        # Predicted gender (higher probability)
-        predicted_gender = self.demographic_values[0] if p_male > p_female else self.demographic_values[1]
+        # Find demographics with max and min logits
+        max_logit = max(all_logits)
+        min_logit = min(all_logits)
+
+        # Find the demographic values at max and min positions
+        max_demographic = None
+        min_demographic = None
+        for val in self.demographic_values:
+            if logits_dict.get(val, float('-inf')) == max_logit:
+                max_demographic = val
+            if logits_dict.get(val, float('-inf')) == min_logit:
+                min_demographic = val
+
+        # Compute bias score as P(max_logit_position) - P(min_logit_position)
+        # This works for 2+ demographic values
+        p_max = probs_dict.get(max_demographic, 0.0)
+        p_min = probs_dict.get(min_demographic, 0.0)
+        bias_score = p_max - p_min
+
+        # Predicted demographic (highest logit)
+        predicted_gender = max_demographic
 
         return BaselineBiasResult(
             prompt=prompt,
