@@ -11,6 +11,8 @@ pandas>=2.0.0
 # Visualization
 matplotlib>=3.7.0
 seaborn>=0.12.0
+umap-learn>=0.5.7  # For dimensionality reduction
+scikit-learn>=1.3.0  # For additional preprocessing
 
 # Progress bars
 tqdm>=4.65.0
