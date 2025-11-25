@@ -181,7 +181,8 @@ def main(args):
 
     # Extract SAE features
     print("\nExtracting SAE features...")
-    feature_counts = get_feature_counts(sae, sae.dict_size, activations, device)
+    sae_dict_size = sae.dict_size  # Save before cleanup
+    feature_counts = get_feature_counts(sae, sae_dict_size, activations, device)
 
     # Clean up
     del sae
@@ -217,14 +218,14 @@ def main(args):
 
     # Initialize probe
     probe = BiasProbe(
-        input_dim=sae.dict_size,
+        input_dim=sae_dict_size,
         output_dim=10,  # Fixed output dimension
         hidden_dims=[]   # Linear probe (no hidden layers)
     )
     probe.to(device)
 
     print(f"\nProbe architecture:")
-    print(f"  Input dim: {sae.dict_size}")
+    print(f"  Input dim: {sae_dict_size}")
     print(f"  Output dim: 10 (fixed)")
     print(f"  Active outputs: {num_classes}")
     print(f"  Hidden layers: None (linear)")
