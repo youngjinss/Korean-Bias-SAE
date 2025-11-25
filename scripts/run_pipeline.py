@@ -7,16 +7,29 @@ Supports running for:
 - Single demographic: --demographic 성별
 - All demographics: --demographic all (generates data for all demographics, then merges)
 
+Background execution:
+- --background: Run pipeline in background with logging
+- --status: Check status of background pipeline
+- --stop: Stop running background pipeline
+
 Usage:
     python scripts/run_pipeline.py --stage pilot --demographic all
     python scripts/run_pipeline.py --stage medium --demographic 성별
+    python scripts/run_pipeline.py --stage pilot --background  # Run in background
+    python scripts/run_pipeline.py --status                    # Check status
+    python scripts/run_pipeline.py --stop                      # Stop background run
 """
 
 import sys
+import os
 import argparse
 import subprocess
+import signal
+import datetime
+import time
+import json
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 # Add project root for imports
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -50,6 +63,204 @@ def log_step(step_num: int, step_name: str):
     print(f"{Colors.GREEN}STEP {step_num}: {step_name}{Colors.NC}")
     print("=" * 80)
     print()
+
+
+# Background execution helpers
+def get_pid_file() -> Path:
+    """Get path to PID file for background process tracking."""
+    return PROJECT_ROOT / "logs" / "pipeline.pid"
+
+def get_status_file() -> Path:
+    """Get path to status file for background process."""
+    return PROJECT_ROOT / "logs" / "pipeline_status.json"
+
+def get_log_file(stage: str) -> Path:
+    """Get path to log file for background execution."""
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    return PROJECT_ROOT / "logs" / f"pipeline_{stage}_{timestamp}.log"
+
+def save_status(status: dict):
+    """Save pipeline status to JSON file."""
+    status_file = get_status_file()
+    status_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(status_file, 'w') as f:
+        json.dump(status, f, indent=2, default=str)
+
+def load_status() -> Optional[dict]:
+    """Load pipeline status from JSON file."""
+    status_file = get_status_file()
+    if status_file.exists():
+        with open(status_file, 'r') as f:
+            return json.load(f)
+    return None
+
+def is_process_running(pid: int) -> bool:
+    """Check if a process with given PID is running."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+def check_background_status():
+    """Check and display status of background pipeline."""
+    pid_file = get_pid_file()
+    status = load_status()
+
+    if not pid_file.exists():
+        log_info("No background pipeline is currently tracked.")
+        if status:
+            print(f"\nLast run status:")
+            print(f"  Stage: {status.get('stage', 'N/A')}")
+            print(f"  Started: {status.get('started_at', 'N/A')}")
+            print(f"  Ended: {status.get('ended_at', 'N/A')}")
+            print(f"  Status: {status.get('status', 'N/A')}")
+            if status.get('log_file'):
+                print(f"  Log file: {status.get('log_file')}")
+        return
+
+    with open(pid_file, 'r') as f:
+        pid = int(f.read().strip())
+
+    if is_process_running(pid):
+        log_info(f"Background pipeline is RUNNING (PID: {pid})")
+        if status:
+            print(f"\nCurrent run:")
+            print(f"  Stage: {status.get('stage', 'N/A')}")
+            print(f"  Demographic: {status.get('demographic', 'N/A')}")
+            print(f"  Started: {status.get('started_at', 'N/A')}")
+            print(f"  Current step: {status.get('current_step', 'N/A')}")
+            if status.get('log_file'):
+                print(f"  Log file: {status.get('log_file')}")
+                print(f"\nTo follow logs: tail -f {status.get('log_file')}")
+    else:
+        log_info(f"Background pipeline has STOPPED (was PID: {pid})")
+        pid_file.unlink()  # Clean up stale PID file
+        if status:
+            print(f"\nLast run:")
+            print(f"  Stage: {status.get('stage', 'N/A')}")
+            print(f"  Status: {status.get('status', 'N/A')}")
+            print(f"  Started: {status.get('started_at', 'N/A')}")
+            print(f"  Ended: {status.get('ended_at', 'N/A')}")
+            if status.get('log_file'):
+                print(f"  Log file: {status.get('log_file')}")
+
+def stop_background_pipeline():
+    """Stop running background pipeline."""
+    pid_file = get_pid_file()
+
+    if not pid_file.exists():
+        log_warning("No background pipeline PID file found.")
+        return False
+
+    with open(pid_file, 'r') as f:
+        pid = int(f.read().strip())
+
+    if not is_process_running(pid):
+        log_warning(f"Process {pid} is not running.")
+        pid_file.unlink()
+        return False
+
+    log_info(f"Stopping background pipeline (PID: {pid})...")
+    try:
+        os.kill(pid, signal.SIGTERM)
+        # Wait for process to terminate
+        for _ in range(10):
+            time.sleep(0.5)
+            if not is_process_running(pid):
+                break
+
+        if is_process_running(pid):
+            log_warning("Process did not terminate, sending SIGKILL...")
+            os.kill(pid, signal.SIGKILL)
+
+        pid_file.unlink()
+
+        # Update status
+        status = load_status() or {}
+        status['status'] = 'stopped'
+        status['ended_at'] = datetime.datetime.now().isoformat()
+        save_status(status)
+
+        log_success("Background pipeline stopped.")
+        return True
+    except Exception as e:
+        log_error(f"Failed to stop process: {e}")
+        return False
+
+def run_in_background(args):
+    """Launch pipeline in background with logging."""
+    pid_file = get_pid_file()
+
+    # Check if already running
+    if pid_file.exists():
+        with open(pid_file, 'r') as f:
+            old_pid = int(f.read().strip())
+        if is_process_running(old_pid):
+            log_error(f"Background pipeline already running (PID: {old_pid})")
+            log_info("Use --status to check status or --stop to stop it.")
+            return False
+        else:
+            pid_file.unlink()  # Clean up stale PID
+
+    # Prepare log file
+    log_file = get_log_file(args.stage)
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Build command (remove --background flag)
+    cmd = [sys.executable, str(Path(__file__))]
+    cmd.extend(['--stage', args.stage])
+    cmd.extend(['--sae_type', args.sae_type])
+    cmd.extend(['--layer_quantile', args.layer_quantile])
+    cmd.extend(['--num_steps', str(args.num_steps)])
+    if args.skip_prerequisites:
+        cmd.append('--skip-prerequisites')
+    if args.skip_baseline:
+        cmd.append('--skip-baseline')
+    if args.start_from > 0:
+        cmd.extend(['--start-from', str(args.start_from)])
+    if args.demographic:
+        cmd.extend(['--demographic', args.demographic])
+
+    log_info(f"Starting pipeline in background...")
+    log_info(f"Log file: {log_file}")
+
+    # Fork and run in background
+    with open(log_file, 'w') as log_f:
+        process = subprocess.Popen(
+            cmd,
+            stdout=log_f,
+            stderr=subprocess.STDOUT,
+            start_new_session=True  # Detach from terminal
+        )
+
+    # Save PID
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(pid_file, 'w') as f:
+        f.write(str(process.pid))
+
+    # Save initial status
+    save_status({
+        'pid': process.pid,
+        'stage': args.stage,
+        'demographic': args.demographic or 'config default',
+        'started_at': datetime.datetime.now().isoformat(),
+        'status': 'running',
+        'current_step': 0,
+        'log_file': str(log_file),
+        'command': ' '.join(cmd)
+    })
+
+    log_success(f"Pipeline started in background (PID: {process.pid})")
+    print(f"\nTo monitor progress:")
+    print(f"  tail -f {log_file}")
+    print(f"\nTo check status:")
+    print(f"  python {__file__} --status")
+    print(f"\nTo stop:")
+    print(f"  python {__file__} --stop")
+
+    return True
+
 
 def run_script(script_path: Path, args: List[str]) -> bool:
     """
@@ -127,8 +338,37 @@ def main():
         default=None,
         help='Demographic category to process. Use "all" for all demographics (성별, 인종, etc.)'
     )
+    # Background execution arguments
+    parser.add_argument(
+        '--background',
+        action='store_true',
+        help='Run pipeline in background with logging'
+    )
+    parser.add_argument(
+        '--status',
+        action='store_true',
+        help='Check status of background pipeline'
+    )
+    parser.add_argument(
+        '--stop',
+        action='store_true',
+        help='Stop running background pipeline'
+    )
 
     args = parser.parse_args()
+
+    # Handle background control commands first
+    if args.status:
+        check_background_status()
+        return 0
+
+    if args.stop:
+        success = stop_background_pipeline()
+        return 0 if success else 1
+
+    if args.background:
+        success = run_in_background(args)
+        return 0 if success else 1
 
     # Get project root
     script_dir = Path(__file__).parent
@@ -171,6 +411,17 @@ def main():
             base_args.extend(['--demographic', demo])
         return base_args
 
+    # Helper function to update status during execution
+    def update_step_status(step_num: int, step_name: str, status_str: str = 'running'):
+        """Update status file with current step (for background monitoring)."""
+        status = load_status()
+        if status:
+            status['current_step'] = step_num
+            status['current_step_name'] = step_name
+            status['status'] = status_str
+            status['last_update'] = datetime.datetime.now().isoformat()
+            save_status(status)
+
     # Run pipeline
     failed_steps = []
 
@@ -180,6 +431,7 @@ def main():
             log_warning("Skipping Step 0: Prerequisites Check")
         else:
             log_step(0, "Prerequisites Check")
+            update_step_status(0, "Prerequisites Check")
             success = run_script(scripts_dir / '00_check_prerequisites.py', [])
             if success:
                 log_success("Step 0 completed")
@@ -193,6 +445,7 @@ def main():
             log_warning("Skipping Step 1: Baseline Bias Measurement")
         else:
             log_step(1, "Baseline Bias Measurement")
+            update_step_status(1, "Baseline Bias Measurement")
             baseline_args = ['--stage', args.stage]
             if demographics and demographic_mode == 'single':
                 baseline_args.extend(['--demographic', demographics[0]])
@@ -206,6 +459,7 @@ def main():
     # === STEP 2: Generate Responses and Extract Activations ===
     if args.start_from <= 2:
         log_step(2, "Generate Responses and Extract Activations")
+        update_step_status(2, "Generate Responses and Extract Activations")
 
         if demographic_mode == 'all':
             # Run for each demographic
@@ -250,6 +504,7 @@ def main():
         # so no special path argument needed
         if args.start_from <= 3:
             log_step(3, "Train Sparse Autoencoder (SAE)")
+            update_step_status(3, "Train Sparse Autoencoder (SAE)")
             sae_args = ['--stage', args.stage, '--sae_type', args.sae_type, '--layer_quantile', args.layer_quantile]
             success = run_script(scripts_dir / '03_train_sae.py', sae_args)
             if success:
@@ -262,6 +517,7 @@ def main():
         # === STEP 4: Train Linear Probe ===
         if args.start_from <= 4 and not critical_failures:
             log_step(4, "Train Linear Probe")
+            update_step_status(4, "Train Linear Probe")
             probe_args = ['--stage', args.stage, '--sae_type', args.sae_type, '--layer_quantile', args.layer_quantile]
             success = run_script(scripts_dir / '04_train_linear_probe.py', probe_args)
             if success:
@@ -274,6 +530,7 @@ def main():
         # === STEP 5: Compute IG2 Attribution ===
         if args.start_from <= 5 and not critical_failures:
             log_step(5, "Compute IG2 Attribution")
+            update_step_status(5, "Compute IG2 Attribution")
             ig2_args = ['--stage', args.stage, '--sae_type', args.sae_type,
                        '--layer_quantile', args.layer_quantile, '--num_steps', str(args.num_steps)]
             success = run_script(scripts_dir / '05_compute_ig2.py', ig2_args)
@@ -287,6 +544,7 @@ def main():
         # === STEP 6: Verify Bias Features ===
         if args.start_from <= 6 and not critical_failures:
             log_step(6, "Verify Bias Features")
+            update_step_status(6, "Verify Bias Features")
             verify_args = ['--stage', args.stage, '--sae_type', args.sae_type, '--layer_quantile', args.layer_quantile]
             success = run_script(scripts_dir / '06_verify_bias_features.py', verify_args)
             if success:
@@ -302,10 +560,23 @@ def main():
     has_critical = any(len(f) < 3 or not f[2] for f in failed_steps)
     if not failed_steps or not has_critical:
         print(f"{Colors.GREEN}PIPELINE COMPLETE!{Colors.NC}")
+        update_step_status(7, "Complete", "completed")
     else:
         print(f"{Colors.RED}PIPELINE FAILED!{Colors.NC}")
+        update_step_status(-1, "Failed", "failed")
     print("=" * 80)
     print()
+
+    # Update final status with end time
+    status = load_status()
+    if status:
+        status['ended_at'] = datetime.datetime.now().isoformat()
+        save_status(status)
+
+    # Clean up PID file when running completes
+    pid_file = get_pid_file()
+    if pid_file.exists():
+        pid_file.unlink()
 
     if failed_steps:
         log_warning("Failed steps:")
