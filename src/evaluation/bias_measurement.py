@@ -1,10 +1,12 @@
 """
 Baseline bias measurement utilities.
+
+Supports both free-form generation and QA multiple choice formats.
 """
 
 import torch
 import numpy as np
-from typing import List, Dict
+from typing import List, Dict, Optional
 import logging
 from ..interfaces import BaselineBiasResult
 
@@ -14,18 +16,36 @@ logger = logging.getLogger(__name__)
 class BiasScorer:
     """
     Measures bias in model predictions.
+
+    Supports two modes:
+    - Generation format: Measures probability of demographic value tokens (e.g., "남자", "여자")
+    - QA format: Measures probability of number tokens (e.g., "0", "1") that map to demographics
     """
 
-    def __init__(self, model_wrapper, demographic_values: List[str] = [" 남자", " 여자"]):
+    def __init__(
+        self,
+        model_wrapper,
+        demographic_values: List[str] = [" 남자", " 여자"],
+        qa_format: bool = False
+    ):
         """
         Initialize bias scorer.
 
         Args:
             model_wrapper: EXAONEWrapper instance
             demographic_values: List of demographic values to compare
+            qa_format: If True, use number tokens (0, 1, 2...) instead of demographic tokens
         """
         self.model = model_wrapper
         self.demographic_values = demographic_values
+        self.qa_format = qa_format
+
+        if qa_format:
+            # Use number tokens for QA format (0-indexed)
+            self.target_tokens = [str(i) for i in range(len(demographic_values))]
+        else:
+            # Use demographic value tokens for generation format
+            self.target_tokens = demographic_values
 
     def measure_single(self, prompt: str) -> BaselineBiasResult:
         """
@@ -37,17 +57,28 @@ class BiasScorer:
         Returns:
             BaselineBiasResult with probabilities, logits, and bias score
         """
-        # Get probabilities for demographic tokens
-        probs_dict = self.model.get_token_probabilities(
+        # Get probabilities and logits for target tokens
+        probs_dict_raw = self.model.get_token_probabilities(
             prompt,
-            target_tokens=self.demographic_values
+            target_tokens=self.target_tokens
+        )
+        logits_dict_raw = self.model.get_token_logits(
+            prompt,
+            target_tokens=self.target_tokens
         )
 
-        # Get logits for demographic tokens
-        logits_dict = self.model.get_token_logits(
-            prompt,
-            target_tokens=self.demographic_values
-        )
+        # Map results to demographic values for consistent downstream processing
+        if self.qa_format:
+            # Convert number-based results to demographic-based
+            probs_dict = {}
+            logits_dict = {}
+            for i, demo_val in enumerate(self.demographic_values):
+                num_token = str(i)
+                probs_dict[demo_val] = probs_dict_raw.get(num_token, 0.0)
+                logits_dict[demo_val] = logits_dict_raw.get(num_token, float('-inf'))
+        else:
+            probs_dict = probs_dict_raw
+            logits_dict = logits_dict_raw
 
         # Extract probabilities for first two demographics (for backwards compatibility)
         p_male = probs_dict.get(self.demographic_values[0], 0.0)
@@ -135,7 +166,8 @@ class BiasScorer:
 def measure_baseline_bias(
     model_wrapper,
     prompts: List[str],
-    demographic_values: List[str] = [" 남자", " 여자"]
+    demographic_values: List[str] = [" 남자", " 여자"],
+    qa_format: bool = False
 ) -> tuple:
     """
     Measure baseline bias across prompts.
@@ -144,13 +176,14 @@ def measure_baseline_bias(
         model_wrapper: EXAONEWrapper instance
         prompts: List of test prompts
         demographic_values: Demographic values to compare
+        qa_format: If True, use number tokens (0, 1, 2...) for QA format prompts
 
     Returns:
         Tuple of (results, aggregate_stats)
     """
-    logger.info(f"Measuring baseline bias on {len(prompts)} prompts...")
+    logger.info(f"Measuring baseline bias on {len(prompts)} prompts (QA format: {qa_format})...")
 
-    scorer = BiasScorer(model_wrapper, demographic_values)
+    scorer = BiasScorer(model_wrapper, demographic_values, qa_format=qa_format)
     results = scorer.measure_batch(prompts)
     aggregate_stats = scorer.aggregate_results(results)
 

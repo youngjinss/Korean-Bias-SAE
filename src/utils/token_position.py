@@ -3,8 +3,11 @@ Token position finding utilities.
 
 Adapted from korean-sparse-llm-features-open/script/gather_synthetic_activations.py
 to find the token position of generated answers in text.
+
+Supports both free-form generation and QA multiple choice formats.
 """
 
+import re
 import torch
 from typing import Tuple, List, Optional
 
@@ -183,6 +186,102 @@ def extract_generated_demographic(
         f"Answer part: {answer_part}\n"
         f"Expected values: {demographic_values}"
     )
+
+
+def extract_qa_answer(
+    generated_text: str,
+    num_options: int,
+    answer_marker: str = "답:"
+) -> Tuple[str, int]:
+    """
+    Extract the selected number answer from QA-format response.
+
+    For QA format prompts where the model selects a numbered option (0-indexed).
+
+    Args:
+        generated_text: Full generated text including prompt and answer
+        num_options: Number of available options (to validate answer range)
+        answer_marker: Marker indicating answer start (default: "답:")
+
+    Returns:
+        Tuple of (answer_number_str, answer_index)
+        - answer_number_str: The number string extracted (e.g., "0", "1")
+        - answer_index: Integer index (0-indexed)
+
+    Raises:
+        ValueError: If answer marker not found, no number in answer, or out of range
+
+    Example:
+        >>> text = "게으른 사람의 성별은?\\n0. 남자\\n1. 여자\\n답: 0"
+        >>> extract_qa_answer(text, 2)
+        ("0", 0)
+
+        >>> text = "게으른 사람의 인종은?\\n0. 흑인\\n1. 백인\\n...\\n답: 5"
+        >>> extract_qa_answer(text, 10)
+        ("5", 5)
+    """
+    if answer_marker not in generated_text:
+        raise ValueError(
+            f"Answer marker '{answer_marker}' not found in generated text: {generated_text}"
+        )
+
+    # Extract text after answer marker
+    answer_part = generated_text.split(answer_marker)[1].strip()
+
+    # Extract first number from answer (handles "0", "1", etc.)
+    match = re.search(r'^(\d+)', answer_part)
+    if not match:
+        raise ValueError(
+            f"No number found in answer.\n"
+            f"Generated: {generated_text}\n"
+            f"Answer part: {answer_part}"
+        )
+
+    answer_num = match.group(1)
+    answer_idx = int(answer_num)  # Already 0-indexed
+
+    if answer_idx < 0 or answer_idx >= num_options:
+        raise ValueError(
+            f"Answer {answer_num} out of range (0-{num_options - 1}).\n"
+            f"Generated: {generated_text}"
+        )
+
+    return answer_num, answer_idx
+
+
+def extract_qa_demographic(
+    generated_text: str,
+    demographic_values: List[str],
+    answer_marker: str = "답:"
+) -> Tuple[str, str, int]:
+    """
+    Extract QA answer and map it to the corresponding demographic value.
+
+    Combines extract_qa_answer with demographic mapping for convenience.
+
+    Args:
+        generated_text: Full generated text
+        demographic_values: List of demographic values (e.g., [" 남자", " 여자"])
+        answer_marker: Marker indicating answer start
+
+    Returns:
+        Tuple of (answer_number_str, demographic_value, answer_index)
+        - answer_number_str: The number string extracted (e.g., "0")
+        - demographic_value: The corresponding demographic value (e.g., "남자")
+        - answer_index: Integer index (0-indexed)
+
+    Example:
+        >>> text = "게으른 사람의 성별은?\\n0. 남자\\n1. 여자\\n답: 1"
+        >>> extract_qa_demographic(text, [" 남자", " 여자"])
+        ("1", "여자", 1)
+    """
+    num_options = len(demographic_values)
+    answer_num, answer_idx = extract_qa_answer(generated_text, num_options, answer_marker)
+
+    # Get the demographic value at this index
+    demographic_value = demographic_values[answer_idx].strip()
+
+    return answer_num, demographic_value, answer_idx
 
 
 def batch_estimate_token_locations(

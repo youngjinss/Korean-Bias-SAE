@@ -8,6 +8,10 @@ This script combines prompt generation and activation extraction because we need
 
 Architecture aligned with korean-sparse-llm-features-open/script/gather_synthetic_activations.py
 
+Supports two prompt formats:
+- Generation format: Model generates demographic value directly (e.g., "남자", "여자")
+- QA format: Model selects numbered option (e.g., "0", "1") that maps to demographic
+
 Key difference from old approach:
 - OLD: Extract from prompt's last token → Wrong!
 - NEW: Extract from answer token position → Correct!
@@ -26,21 +30,29 @@ sys.path.append(str(PROJECT_ROOT))
 
 from src.models import EXAONEWrapper
 from src.utils import load_json, load_config
-from src.utils.token_position import estimate_token_location, extract_generated_demographic
+from src.utils.token_position import (
+    estimate_token_location,
+    extract_generated_demographic,
+    extract_qa_answer,
+    extract_qa_demographic
+)
+from src.utils.prompt_generation import format_options
 from src.utils.demographic_utils import (
     validate_demographic_config,
     get_demographic_info,
+    get_demographic_values,
     format_demographic_info
 )
 
 
-def generate_prompts(config, stage='pilot'):
+def generate_prompts(config, stage='pilot', qa_format=False):
     """
     Generate bias prompts from modifiers and templates.
 
     Args:
         config: Experiment configuration
         stage: 'pilot', 'medium', or 'full'
+        qa_format: If True, use QA format templates with numbered options
 
     Returns:
         List of prompt dictionaries
@@ -49,13 +61,20 @@ def generate_prompts(config, stage='pilot'):
     negative_mods = load_json(f'data/modifiers/{stage}_negative_ko.json')
     positive_mods = load_json(f'data/modifiers/{stage}_positive_ko.json')
 
-    # Load templates
+    # Load templates (QA or generation format)
     templates_data = load_json('data/templates/korean_templates.json')
-    templates = templates_data[f'{stage}_templates']
+    template_key = f'{stage}_templates_qa' if qa_format else f'{stage}_templates'
+    templates = templates_data[template_key]
 
     # Get demographic info
     demographic = config['data']['demographic']
     demographic_values = config['data']['demographic_values']
+
+    # Pre-compute options string for QA format
+    options_str = None
+    if qa_format:
+        # Strip leading spaces for display, keep original for mapping
+        options_str = format_options(demographic_values)
 
     # Generate prompts
     prompts = []
@@ -66,12 +85,19 @@ def generate_prompts(config, stage='pilot'):
                     Modifier=modifier,
                     Demographic_Dimension=demographic
                 )
+
+                # Replace {Options} placeholder for QA format
+                if qa_format and options_str is not None:
+                    prompt = prompt.replace('{Options}', options_str)
+
                 prompts.append({
                     'prompt': prompt,
                     'modifier': modifier,
                     'modifier_type': modifier_type,
                     'demographic_dimension': demographic,
-                    'demographic_values': demographic_values
+                    'demographic_values': demographic_values,
+                    'num_options': len(demographic_values),
+                    'qa_format': qa_format
                 })
 
     return prompts
@@ -81,12 +107,25 @@ def main(args):
     # Load config
     config = load_config('configs/experiment_config.yaml')
 
+    # Determine QA format from config or args
+    qa_format = args.qa_format
+    if 'qa_format' in config.get('data', {}):
+        qa_format = config['data']['qa_format'].get('enabled', qa_format)
+
+    # Override demographic if specified via command line
+    if args.demographic:
+        demographic = args.demographic
+        demographic_values_config = get_demographic_values(demographic)
+        config['data']['demographic'] = demographic
+        config['data']['demographic_values'] = demographic_values_config
+    else:
+        demographic = config['data']['demographic']
+        demographic_values_config = config['data']['demographic_values']
+
     print(f"=== Generating and Extracting Activations ===")
     print(f"Stage: {args.stage}")
-
-    # Validate demographic configuration
-    demographic = config['data']['demographic']
-    demographic_values_config = config['data']['demographic_values']
+    print(f"Demographic: {demographic}")
+    print(f"Format: {'QA Multiple Choice (0-indexed)' if qa_format else 'Free-form Generation'}")
 
     is_valid, msg = validate_demographic_config(
         demographic,
@@ -95,13 +134,13 @@ def main(args):
     )
 
     if not is_valid:
-        print(f"\n❌ ERROR: Invalid demographic configuration!")
+        print(f"\nERROR: Invalid demographic configuration!")
         print(f"   {msg}")
         print(f"\nPlease update configs/experiment_config.yaml")
         print(f"See data/demographic_dict_ko.json for valid options.")
         return
 
-    print(f"✓ Demographic configuration validated")
+    print(f"Demographic configuration validated")
     print(f"\n{format_demographic_info(demographic, data_dir='data')}")
 
     # Get demographic values (strip leading spaces for comparison)
@@ -109,7 +148,7 @@ def main(args):
 
     print(f"\nActive demographic values for this experiment:")
     for i, val in enumerate(demographic_values):
-        print(f"  {i+1}. '{val}'")
+        print(f"  {i}. '{val}'" if qa_format else f"  {i+1}. '{val}'")
 
     # Load EXAONE
     print("\nLoading EXAONE model...")
@@ -123,8 +162,15 @@ def main(args):
 
     # Generate prompts
     print(f"\nGenerating {args.stage} prompts...")
-    prompts = generate_prompts(config, stage=args.stage)
+    prompts = generate_prompts(config, stage=args.stage, qa_format=qa_format)
     print(f"Generated {len(prompts)} prompts")
+
+    # Show example prompt
+    if prompts:
+        print(f"\nExample prompt:")
+        print("-" * 40)
+        print(prompts[0]['prompt'])
+        print("-" * 40)
 
     # Prepare activation storage
     # This matches the format from korean-sparse-llm-features-open
@@ -156,6 +202,7 @@ def main(args):
     errors = []
     for idx, prompt_data in enumerate(tqdm(prompts, desc="Processing prompts")):
         prompt = prompt_data['prompt']
+        is_qa = prompt_data.get('qa_format', False)
 
         try:
             # 1. Generate full response from EXAONE
@@ -166,17 +213,28 @@ def main(args):
                 pad_token_id=exaone.tokenizer.eos_token_id
             )
 
-            # 2. Extract which demographic was generated
-            generated_demo = extract_generated_demographic(
-                generated_text,
-                demographic_values
-            )
+            # 2. Extract answer based on format
+            if is_qa:
+                # QA format: Extract number answer and map to demographic
+                answer_num, generated_demo, _ = extract_qa_demographic(
+                    generated_text,
+                    demographic_values_config  # Use original values with leading spaces
+                )
+                # For token position, look for the number token
+                target_for_position = answer_num
+            else:
+                # Generation format: Extract demographic value directly
+                generated_demo = extract_generated_demographic(
+                    generated_text,
+                    demographic_values
+                )
+                target_for_position = generated_demo
 
             # 3. Find token position of the answer
             # This is the KEY step that aligns with korean-sparse-llm-features-open
             tokens, answer_pos = estimate_token_location(
                 text=generated_text,
-                target=generated_demo,
+                target=target_for_position,
                 tokenizer=exaone.tokenizer,
                 window_size=args.window_size,
                 max_length=args.max_length
@@ -231,7 +289,8 @@ def main(args):
 
     # Save activations
     print(f"\nSaving activations...")
-    output_dir = Path(config['paths']['results_dir']) / args.stage
+    # Include demographic in output path for organization
+    output_dir = Path(config['paths']['results_dir']) / args.stage / demographic
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Stack tensors (following korean-sparse-llm-features-open format)
@@ -279,6 +338,7 @@ def main(args):
     # Save summary statistics
     summary = {
         'stage': args.stage,
+        'qa_format': qa_format,
         'demographic': config['data']['demographic'],
         'demographic_values': demographic_values,
         'total_prompts': len(prompts),
@@ -320,6 +380,12 @@ if __name__ == '__main__':
         help='Experiment stage (determines data size)'
     )
     parser.add_argument(
+        '--qa_format',
+        action='store_true',
+        default=False,
+        help='Use QA multiple choice format with numbered options (0-indexed)'
+    )
+    parser.add_argument(
         '--window_size',
         type=int,
         default=10,
@@ -336,6 +402,12 @@ if __name__ == '__main__':
         type=int,
         default=5,
         help='Maximum new tokens to generate in response'
+    )
+    parser.add_argument(
+        '--demographic',
+        type=str,
+        default=None,
+        help='Demographic category (성별, 인종, 종교, etc.). Overrides config.'
     )
     args = parser.parse_args()
 
