@@ -17,7 +17,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
 from src.models.sae.gated_sae import GatedAutoEncoder, GatedTrainer
-from src.utils.experiment_utils import setup_experiment, load_config
+from src.utils.experiment_utils import load_config
 
 
 def train_sae(
@@ -152,7 +152,7 @@ def train_sae(
     print("=" * 80)
 
     # Save final model
-    final_model_path = save_dir / "sae_model.pt"
+    final_model_path = save_dir / "model.pth"
     torch.save(trainer.ae.state_dict(), final_model_path)
     print(f"✓ Saved final model to {final_model_path}")
 
@@ -181,10 +181,16 @@ def main():
     parser.add_argument("--stage", type=str, default="pilot",
                        choices=["pilot", "medium", "full"],
                        help="Data stage to use")
-    parser.add_argument("--activations", type=str, required=True,
-                       help="Path to activations file (.pt)")
+    parser.add_argument("--sae_type", type=str, default="gated",
+                       choices=["gated", "standard"],
+                       help="SAE type to train")
+    parser.add_argument("--layer_quantile", type=str, default="q2",
+                       choices=["q1", "q2", "q3"],
+                       help="Layer quantile to use")
+    parser.add_argument("--activations", type=str, default=None,
+                       help="Path to activations file (default: results/{stage}/activations.pkl)")
     parser.add_argument("--output", type=str, default=None,
-                       help="Output directory (default: results/{stage}/)")
+                       help="Output directory (default: checkpoints/sae-{sae_type}_{stage}_{layer_quantile}/)")
     parser.add_argument("--steps", type=int, default=None,
                        help="Override total training steps")
     parser.add_argument("--batch-size", type=int, default=None,
@@ -201,27 +207,37 @@ def main():
     if args.batch_size is not None:
         config['sae']['training']['batch_size'] = args.batch_size
 
-    # Setup output directory
+    # Setup paths
+    if args.activations is None:
+        activations_path = PROJECT_ROOT / "results" / args.stage / "activations.pkl"
+    else:
+        activations_path = Path(args.activations)
+
     if args.output is None:
-        output_dir = PROJECT_ROOT / "results" / args.stage
+        output_dir = PROJECT_ROOT / "checkpoints" / f"sae-{args.sae_type}_{args.stage}_{args.layer_quantile}"
     else:
         output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\nLoading activations from: {args.activations}")
-    activations = torch.load(args.activations, map_location='cpu')
+    print(f"\nLoading activations from: {activations_path}")
 
-    # Handle different activation formats
-    if isinstance(activations, dict):
-        # Extract activations tensor
-        if 'activations' in activations:
-            activations = activations['activations']
-        elif 'features' in activations:
-            activations = activations['features']
-        else:
-            raise KeyError("Could not find activations in loaded data")
+    # Load activations from pickle file
+    import pickle
+    with open(activations_path, 'rb') as f:
+        data = pickle.load(f)
+
+    # Extract the correct quantile activations
+    quantile_key = f"{args.stage}_residual_{args.layer_quantile}"
+    if quantile_key not in data:
+        raise KeyError(f"Quantile key '{quantile_key}' not found. Available keys: {list(data.keys())}")
+
+    activations = data[quantile_key]
+
+    if not isinstance(activations, torch.Tensor):
+        raise TypeError(f"Expected torch.Tensor, got {type(activations)}")
 
     print(f"Activations shape: {activations.shape}")
+    print(f"Number of samples: {len(activations)}")
 
     # Train SAE
     model, logs = train_sae(

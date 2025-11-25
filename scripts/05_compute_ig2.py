@@ -104,6 +104,8 @@ def main(args):
         sae = AutoEncoder.from_pretrained(str(sae_path))
     elif args.sae_type == 'gated':
         sae = GatedAutoEncoder.from_pretrained(str(sae_path))
+    else:
+        raise ValueError(f"Unknown SAE type: {args.sae_type}")
     sae.to(device)
 
     # Extract SAE features

@@ -20,6 +20,19 @@ sae:
   token_position: "last"  # last, mean, or specific
   sae_type: "gated"  # gated or standard
 
+  # SAE Training Configuration
+  training:
+    total_steps: 10000  # Total training steps (pilot: 10k, medium: 50k, full: 100k)
+    batch_size: 32
+    learning_rate: 1e-4
+    sparsity_penalty: 0.1  # L1 penalty coefficient
+    p_start: 1.0  # Starting p for Lp^p sparsity (1.0 = L1)
+    p_end: 0.0  # Ending p for Lp^p sparsity (0.0 = L0 approximation)
+    anneal_start: 5000  # When to start annealing p
+    warmup_steps: 1000  # Learning rate warmup steps
+    save_interval: 1000  # Save checkpoint every N steps
+    log_interval: 100  # Log metrics every N steps
+
 # Linear Probe Configuration
 probe:
   input_dim: 100000  # SAE feature dimension
@@ -79,6 +92,14 @@ data:
   #
   # demographic: "나이"
   # demographic_values: [" 젊은", " 늙은"]
+
+  # QA Format Configuration
+  # When enabled, prompts use numbered multiple choice options (0-indexed)
+  # Example: "게으른 사람의 성별은?\n0. 남자\n1. 여자\n답:"
+  # Model answers with a number (0, 1, 2...) instead of the demographic value
+  qa_format:
+    enabled: true  # Set to false to use original generation format
+    # Options are always 0-indexed (0-9 max) to ensure single-token answers
 
 # Baseline Bias Measurement
 baseline:
