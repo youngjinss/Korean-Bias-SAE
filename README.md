@@ -16,6 +16,7 @@ A **standalone** research codebase for detecting and interpreting bias in Korean
 - [Quick Start](#quick-start)
 - [Pipeline Flow](#pipeline-flow)
 - [IG² Implementation Details](#ig²-implementation-details)
+- [Visualization Suite](#visualization-suite)
 - [Configuration Reference](#configuration-reference)
 - [File Structure](#file-structure)
 - [Troubleshooting](#troubleshooting)
@@ -173,6 +174,13 @@ logits = probe.forward(features, mask=mask)
 - ✅ `04_train_linear_probe.py` - Probe training with masking ⭐
 - ✅ `05_compute_ig2.py` - **IG² computation (Bias-Neurons style)** ⭐
 - ✅ `06_verify_bias_features.py` - Verification tests (suppression/amplification) ⭐
+- ✅ `merge_activations.py` - Merge multi-demographic activations for gSAE training
+- ✅ `generate_mock_data.py` - Generate mock data for visualization testing
+
+**Visualization Suite:**
+- ✅ 5 comprehensive notebooks for bias feature analysis
+- ✅ 40+ utility functions (UMAP, feature selection, plotting)
+- ✅ Korean font support for matplotlib
 
 **Data (All Stages Ready):**
 - ✅ Demographic dictionary (`data/demographic_dict_ko.json`)
@@ -508,6 +516,49 @@ IG²_gap(x) = |IG²(x, demo1) - IG²(x, demo2)|
 
 ---
 
+## Visualization Suite
+
+A comprehensive visualization suite adapted from korean-sparse-llm-features-open for analyzing bias features.
+
+### Available Notebooks (`notebooks/visualizations/`)
+
+| Notebook | Purpose | Key Visualizations |
+|----------|---------|-------------------|
+| `01_visualize_bias_feature_clusters.ipynb` | UMAP-based feature clustering | 3×3 grid scatter plots, feature frequency histogram |
+| `02_visualize_ig2_rankings.ipynb` | IG² attribution analysis | Top-20 bar charts per demographic, score distributions |
+| `03_visualize_activation_heatmaps.ipynb` | Feature activation patterns | Heatmaps, sparsity analysis, K-means clustering |
+| `04_visualize_verification_effects.ipynb` | Causal validation | Suppress/amplify/random comparison plots |
+| `05_visualize_sae_training_loss.ipynb` | Training dynamics | Loss curves, convergence analysis |
+
+### Utility Modules (`src/visualization/`)
+
+- **`font_utils.py`** - Korean font configuration for matplotlib
+- **`data_loaders.py`** - Load SAE features, IG² results, verification data
+- **`umap_utils.py`** - UMAP dimensionality reduction (4096D → 2D)
+- **`feature_selection.py`** - Top-k features, TF-IDF weighting, sparsity analysis
+- **`plotting_utils.py`** - UMAP clusters, IG² rankings, heatmaps, loss curves
+
+### Quick Start
+
+```bash
+# 1. Generate mock data for testing
+python scripts/generate_mock_data.py
+
+# 2. Run visualization notebooks
+jupyter notebook notebooks/visualizations/01_visualize_bias_feature_clusters.ipynb
+```
+
+### Key Adaptations from korean-sparse-llm-features-open
+
+| Aspect | Original | Adapted |
+|--------|----------|---------|
+| Feature Selection | TF-IDF by document categories | IG² attribution by demographic bias |
+| Categories | 8 document topics | 9 demographic dimensions |
+| Data Source | KEAT dataset (5,034 samples) | BiasPrompt (30/500/8,806 prompts) |
+| New Visualizations | - | IG² rankings, verification effects, SAE training curves |
+
+---
+
 ## Configuration Reference
 
 ### Key Settings
@@ -584,7 +635,23 @@ korean-bias-sae/
 │   ├── evaluation/
 │   │   ├── bias_measurement.py       # Bias scoring
 │   │   └── verification.py           # Suppression/amplification
+│   ├── visualization/                 # ⭐ Visualization utilities
+│   │   ├── __init__.py               # 40+ exported functions
+│   │   ├── font_utils.py             # Korean font configuration
+│   │   ├── data_loaders.py           # Load SAE features, IG², verification
+│   │   ├── umap_utils.py             # UMAP dimensionality reduction
+│   │   ├── feature_selection.py      # Top-k, TF-IDF, sparsity analysis
+│   │   └── plotting_utils.py         # UMAP, IG², heatmaps, loss curves
 │   └── interfaces.py                 # Data contracts
+├── notebooks/
+│   └── visualizations/                # ⭐ Visualization notebooks
+│       ├── README.md                 # Detailed usage guide
+│       ├── 01_visualize_bias_feature_clusters.ipynb
+│       ├── 02_visualize_ig2_rankings.ipynb
+│       ├── 03_visualize_activation_heatmaps.ipynb
+│       ├── 04_visualize_verification_effects.ipynb
+│       ├── 05_visualize_sae_training_loss.ipynb
+│       └── assets/                   # Output directory
 ├── scripts/
 │   ├── run_pipeline.sh               # ⭐ Master pipeline script (bash)
 │   ├── run_pipeline.py               # ⭐ Master pipeline script (Python)
@@ -594,13 +661,18 @@ korean-bias-sae/
 │   ├── 03_train_sae.py               # ✅ SAE training
 │   ├── 04_train_linear_probe.py      # ✅ Linear probe with masking
 │   ├── 05_compute_ig2.py             # ✅ IG² computation
-│   └── 06_verify_bias_features.py    # ✅ Bias verification
+│   ├── 06_verify_bias_features.py    # ✅ Bias verification
+│   ├── merge_activations.py          # ✅ Merge multi-demographic activations
+│   └── generate_mock_data.py         # ✅ Mock data for visualization testing
 ├── checkpoints/
 │   └── sae-gated_pilot_q2/           # Trained SAE models
 │       └── model.pth
 └── results/
     └── pilot/
-        ├── activations.pkl           # Generated activations
+        ├── activations.pkl           # Generated activations (merged)
+        ├── activations_metadata.json # Multi-demographic sample indices
+        ├── <demographic>/            # Per-demographic activations
+        │   └── activations.pkl
         ├── probe/
         │   └── linear_probe.pt       # Trained probe
         ├── ig2/
