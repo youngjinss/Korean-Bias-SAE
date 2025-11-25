@@ -7,3 +7,5 @@ __pycache__/
 data/generated/
 
 results/*
+
+checkpoints/
