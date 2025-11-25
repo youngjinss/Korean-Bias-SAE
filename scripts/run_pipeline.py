@@ -151,7 +151,7 @@ def main():
             'num': 2,
             'name': 'Generate Responses and Extract Activations',
             'script': scripts_dir / '02_generate_and_extract_activations.py',
-            'args': ['--stage', args.stage, '--layer_quantile', args.layer_quantile],
+            'args': ['--stage', args.stage],
             'optional': False,
             'skip_flag': False
         },

@@ -146,8 +146,7 @@ fi
 # Step 2: Generate and extract activations
 log_step "2" "Generate Responses and Extract Activations"
 python scripts/02_generate_and_extract_activations.py \
-    --stage "$STAGE" \
-    --layer_quantile "$LAYER_QUANTILE"
+    --stage "$STAGE"
 
 if [ $? -ne 0 ]; then
     log_error "Activation extraction failed"

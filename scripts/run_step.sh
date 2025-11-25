@@ -64,10 +64,9 @@ case $STEP in
         python "$SCRIPT_DIR/01_measure_baseline_bias.py" --stage "$STAGE"
         ;;
     2)
-        echo "Running: Generate and Extract Activations (stage=$STAGE, layer=$LAYER_QUANTILE)"
+        echo "Running: Generate and Extract Activations (stage=$STAGE)"
         python "$SCRIPT_DIR/02_generate_and_extract_activations.py" \
-            --stage "$STAGE" \
-            --layer_quantile "$LAYER_QUANTILE"
+            --stage "$STAGE"
         ;;
     3)
         echo "Running: Train SAE (stage=$STAGE, type=$SAE_TYPE, layer=$LAYER_QUANTILE)"
