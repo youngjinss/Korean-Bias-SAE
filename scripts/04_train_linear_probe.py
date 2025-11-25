@@ -72,7 +72,9 @@ def main(args):
     # Load config
     config = load_config('configs/experiment_config.yaml')
     demographic = config['data']['demographic']
-    device = torch.device(config['model']['device'])
+    # Get primary device from devices list
+    devices = config['model'].get('devices', ['cuda' if torch.cuda.is_available() else 'cpu'])
+    device = torch.device(devices[0] if isinstance(devices, list) else devices)
 
     # Get demographic info
     demo_info = get_demographic_info(demographic, data_dir='data')

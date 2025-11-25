@@ -156,10 +156,13 @@ def main():
 
     # Load EXAONE model
     logger.info("\nLoading EXAONE model...")
+    # Get primary device from devices list
+    devices = config['model'].get('devices', ['cuda'])
+    primary_device = devices[0] if isinstance(devices, list) else devices
     try:
         exaone = EXAONEWrapper(
             model_name=config['model']['name'],
-            device=config['model']['device'],
+            device=primary_device,
             dtype=config['model']['dtype']
         )
         logger.info(f"✅ Model loaded: {exaone}")

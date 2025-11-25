@@ -55,10 +55,16 @@ def train_sae(
     anneal_start = int(config['sae']['training'].get('anneal_start', 5000))
     warmup_steps = int(config['sae']['training'].get('warmup_steps', 1000))
 
-    # Use device from config (e.g., "cuda:2"), fallback to cuda/cpu
-    device_str = config['model'].get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
-    device = torch.device(device_str)
-    print(f"\nDevice: {device}")
+    # Get devices from config (list of devices for multi-GPU support)
+    devices = config['model'].get('devices', ['cuda' if torch.cuda.is_available() else 'cpu'])
+    if not isinstance(devices, list):
+        devices = [devices]
+    primary_device = torch.device(devices[0])
+    multi_gpu = len(devices) > 1
+
+    print(f"\nDevices: {devices}")
+    print(f"Primary device: {primary_device}")
+    print(f"Multi-GPU: {multi_gpu}")
     print(f"Activation dim: {activation_dim}")
     print(f"Feature dim: {feature_dim}")
     print(f"Total steps: {total_steps}")
@@ -66,7 +72,7 @@ def train_sae(
     print(f"Learning rate: {lr}")
     print(f"Sparsity penalty: {sparsity_penalty}")
 
-    # Initialize trainer
+    # Initialize trainer with multi-GPU support
     trainer = GatedTrainer(
         dict_class=GatedAutoEncoder,
         activation_dim=activation_dim,
@@ -83,7 +89,7 @@ def train_sae(
         sparsity_queue_length=10,
         resample_steps=None,
         total_steps=total_steps,
-        device=device
+        devices=devices  # Pass devices list for multi-GPU support
     )
 
     print("\n" + "=" * 80)
@@ -108,7 +114,7 @@ def train_sae(
         if step % log_interval == 0:
             with torch.no_grad():
                 # Get loss components
-                loss_log = trainer.loss(batch.to(device), step, logging=True)
+                loss_log = trainer.loss(batch.to(primary_device), step, logging=True)
 
                 # Compute sparsity (L0 norm)
                 features = loss_log.f
@@ -142,7 +148,7 @@ def train_sae(
             checkpoint_path = save_dir / f"checkpoint_step_{step}.pt"
             torch.save({
                 'step': step,
-                'model_state_dict': trainer.ae.state_dict(),
+                'model_state_dict': trainer.base_model.state_dict(),  # Use base_model to avoid DataParallel prefix
                 'optimizer_state_dict': trainer.optimizer.state_dict(),
                 'config': trainer.config
             }, checkpoint_path)
@@ -153,9 +159,9 @@ def train_sae(
     print("Training Complete")
     print("=" * 80)
 
-    # Save final model
+    # Save final model (use base_model to avoid DataParallel 'module.' prefix)
     final_model_path = save_dir / "model.pth"
-    torch.save(trainer.ae.state_dict(), final_model_path)
+    torch.save(trainer.base_model.state_dict(), final_model_path)
     print(f"✓ Saved final model to {final_model_path}")
 
     # Save training logs

@@ -155,9 +155,12 @@ def main(args):
 
     # Load EXAONE
     print("\nLoading EXAONE model...")
+    # Get primary device from devices list
+    devices = config['model'].get('devices', ['cuda'])
+    primary_device = devices[0] if isinstance(devices, list) else devices
     exaone = EXAONEWrapper(
         model_name=config['model']['name'],
-        device=config['model']['device'],
+        device=primary_device,
         dtype=config['model']['dtype']
     )
     print(f"Model loaded: {exaone.model_name}")

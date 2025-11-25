@@ -122,6 +122,7 @@ class GatedAutoEncoder(nn.Module):
 class GatedTrainer():
     """
     Gated SAE training scheme with p-annealing.
+    Supports multi-GPU training via DataParallel.
     """
     def __init__(self,
                  dict_class=GatedAutoEncoder,
@@ -139,7 +140,8 @@ class GatedTrainer():
                  sparsity_queue_length=10,  # number of recent sparsity loss terms, onle needed for adaptive_sparsity_penalty
                  resample_steps=None,  # number of steps after which to resample dead neurons
                  total_steps=None,  # total number of steps to train for
-                 device='cuda',
+                 device='cuda',  # Primary device (for backwards compatibility)
+                 devices=None,  # List of devices for multi-GPU training
                  ):
 
         # initialize dictionary
@@ -147,8 +149,25 @@ class GatedTrainer():
         self.dict_size = dict_size
         self.ae = dict_class(activation_dim, dict_size)
 
-        self.device = device
+        # Handle device configuration
+        # devices takes precedence over device
+        if devices is not None and len(devices) > 0:
+            self.devices = devices
+            self.device = devices[0]  # Primary device
+            self.multi_gpu = len(devices) > 1
+        else:
+            self.device = device
+            self.devices = [device]
+            self.multi_gpu = False
+
         self.ae.to(self.device)
+
+        # Wrap with DataParallel if multiple GPUs
+        if self.multi_gpu:
+            # Extract device IDs from device strings (e.g., "cuda:2" -> 2)
+            device_ids = [int(d.split(':')[1]) if ':' in d else 0 for d in self.devices]
+            self.ae = nn.DataParallel(self.ae, device_ids=device_ids)
+            print(f"Multi-GPU enabled: {self.devices} (device_ids: {device_ids})")
 
         self.lr = lr
         self.sparsity_function = sparsity_function
@@ -182,7 +201,9 @@ class GatedTrainer():
         else:
             self.steps_since_active = None
 
-        self.optimizer = ConstrainedAdam(self.ae.parameters(), self.ae.decoder.parameters(), lr=lr)
+        # Get the underlying model (handle DataParallel wrapping)
+        base_model = self.ae.module if self.multi_gpu else self.ae
+        self.optimizer = ConstrainedAdam(self.ae.parameters(), base_model.decoder.parameters(), lr=lr)
         if resample_steps is None:
             def warmup_fn(step):
                 return min(step / warmup_steps, 1.)
@@ -191,10 +212,16 @@ class GatedTrainer():
                 return min((step % resample_steps) / warmup_steps, 1.)
         self.scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=warmup_fn)
 
+    @property
+    def base_model(self):
+        """Get the underlying model, unwrapping DataParallel if needed."""
+        return self.ae.module if self.multi_gpu else self.ae
+
     def resample_neurons(self, deads, activations):
         # activations: [batch_size, activation_dim]
-        # self.ae.encoder.weight: [activation_dim, dict_size]
-        # self.ae.decoder.weight: [dict_size, activation_dim]
+        # base_model.encoder.weight: [activation_dim, dict_size]
+        # base_model.decoder.weight: [dict_size, activation_dim]
+        base_model = self.base_model
         with torch.no_grad():
             if deads.sum() == 0:
                 return
@@ -219,13 +246,13 @@ class GatedTrainer():
             sampled_vecs = activations[indices]  # [n_resample, activation_dim]
 
             # 살아있는 뉴런들의 평균 norm으로 스케일링
-            alive_norm = self.ae.encoder.weight[~deads].norm(dim=-1).mean()  # [n_alive, activation_dim]
+            alive_norm = base_model.encoder.weight[~deads].norm(dim=-1).mean()  # [n_alive, activation_dim]
 
             # dead 뉴런 재초기화
             sampled_vecs_normalized = sampled_vecs / sampled_vecs.norm(dim=-1, keepdim=True)
-            self.ae.encoder.weight[deads] = sampled_vecs * alive_norm * 0.2  # [n_dead, activation_dim]
-            self.ae.decoder.weight[:, deads] = sampled_vecs_normalized.T  # [activation_dim, n_dead]
-            self.ae.encoder.bias[deads] = 0.
+            base_model.encoder.weight[deads] = sampled_vecs * alive_norm * 0.2  # [n_dead, activation_dim]
+            base_model.decoder.weight[:, deads] = sampled_vecs_normalized.T  # [activation_dim, n_dead]
+            base_model.encoder.bias[deads] = 0.
 
             # Adam 옵티마이저 상태 초기화
             state_dict = self.optimizer.state_dict()['state']
@@ -252,9 +279,10 @@ class GatedTrainer():
             raise ValueError("Sparsity function must be 'Lp' or 'Lp^p'")
 
     def loss(self, x, step, logging=False, **kwargs):
-        f, f_gate = self.ae.encode(x, return_gate=True)
-        x_hat = self.ae.decode(f)
-        x_hat_gate = f_gate @ self.ae.decoder.weight.detach().T + self.ae.decoder_bias.detach()
+        base_model = self.base_model
+        f, f_gate = base_model.encode(x, return_gate=True)
+        x_hat = base_model.decode(f)
+        x_hat_gate = f_gate @ base_model.decoder.weight.detach().T + base_model.decoder_bias.detach()
 
         L_recon = (x - x_hat).pow(2).sum(dim=-1).mean()
         L_aux = (x - x_hat_gate).pow(2).sum(dim=-1).mean()
@@ -348,4 +376,6 @@ class GatedTrainer():
             'resample_steps': self.resample_steps,
             'total_steps': self.total_steps,
             'device': self.device,
+            'devices': self.devices,
+            'multi_gpu': self.multi_gpu,
         }
