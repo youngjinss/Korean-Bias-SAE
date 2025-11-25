@@ -8,6 +8,12 @@ Key differences:
 1. Predicts demographic values (male/female, etc.) instead of categories
 2. Uses unified probe architecture with masking for all demographics
 3. Works with generation-based activations (answer tokens)
+
+IMPORTANT: Following the pattern from korean-sparse-llm-features-open, we train
+SEPARATE linear probes for each demographic category. This is necessary because:
+- Each demographic has different label values (gender: male/female, race: white/black/etc.)
+- IG2 attribution requires a probe that classifies the specific demographic
+- The SAE is shared across all demographics, but probes are demographic-specific
 """
 
 import sys
@@ -25,7 +31,7 @@ sys.path.append(str(PROJECT_ROOT))
 from src.models.sae import GatedAutoEncoder, AutoEncoder
 from src.models import BiasProbe
 from src.utils import load_config
-from src.utils.demographic_utils import get_demographic_info, get_demographic_mask
+from src.utils.demographic_utils import get_demographic_info, get_demographic_mask, get_all_demographics
 
 
 def get_feature_counts(sae, num_dict, activations, device='cuda'):
@@ -71,7 +77,14 @@ def get_feature_counts(sae, num_dict, activations, device='cuda'):
 def main(args):
     # Load config
     config = load_config('configs/experiment_config.yaml')
-    demographic = config['data']['demographic']
+
+    # Determine which demographic to use
+    # Priority: command line arg > config file
+    if args.demographic:
+        demographic = args.demographic
+    else:
+        demographic = config['data']['demographic']
+
     # Get primary device from devices list
     devices = config['model'].get('devices', ['cuda' if torch.cuda.is_available() else 'cpu'])
     device = torch.device(devices[0] if isinstance(devices, list) else devices)
@@ -87,21 +100,62 @@ def main(args):
     print(f"Values: {[v.strip() for v in demographic_values]}")
     print(f"Number of classes: {num_classes}")
 
-    # Load activations
-    activation_path = Path(config['paths']['results_dir']) / args.stage / 'activations.pkl'
+    # Determine activation path
+    # When --demographic is specified, use per-demographic activation file
+    # Otherwise, use the default (possibly merged) activation file
+    results_dir = Path(config['paths']['results_dir'])
+
+    if args.demographic:
+        # Use per-demographic activation file
+        activation_path = results_dir / args.stage / demographic / 'activations.pkl'
+    else:
+        # Use default location (may be merged or single-demographic)
+        activation_path = results_dir / args.stage / 'activations.pkl'
 
     if not activation_path.exists():
-        print(f"\nERROR: Activation file not found at {activation_path}")
-        print(f"Please run 02_generate_and_extract_activations.py first")
-        return
+        # Fallback: try per-demographic path if default doesn't exist
+        fallback_path = results_dir / args.stage / demographic / 'activations.pkl'
+        if fallback_path.exists():
+            activation_path = fallback_path
+            print(f"Using per-demographic activation file: {activation_path}")
+        else:
+            print(f"\nERROR: Activation file not found at {activation_path}")
+            print(f"Also checked: {fallback_path}")
+            print(f"Please run 02_generate_and_extract_activations.py first")
+            return
 
     print(f"\nLoading activations from {activation_path}")
     with open(activation_path, 'rb') as f:
         activations_dict = pickle.load(f)
 
+    # Check if this is a merged activation file (has demographics field)
+    demographics_field = f'{args.stage}_demographics'
+    is_merged = demographics_field in activations_dict
+
     # Get activations and labels
-    activations = activations_dict[f'{args.stage}_residual_{args.layer_quantile}']
-    labels = activations_dict[f'{args.stage}_labels']
+    all_activations = activations_dict[f'{args.stage}_residual_{args.layer_quantile}']
+    all_labels = activations_dict[f'{args.stage}_labels']
+
+    # If merged file, filter to only samples from the target demographic
+    if is_merged:
+        print(f"Detected merged activation file, filtering for demographic: {demographic}")
+        sample_demographics = activations_dict[demographics_field]
+
+        # Find indices for this demographic
+        indices = [i for i, d in enumerate(sample_demographics) if d == demographic]
+
+        if not indices:
+            print(f"\nERROR: No samples found for demographic '{demographic}' in merged file")
+            print(f"Available demographics: {set(sample_demographics)}")
+            return
+
+        # Filter activations and labels
+        activations = all_activations[indices]
+        labels = [all_labels[i] for i in indices]
+        print(f"Filtered to {len(indices)} samples for {demographic}")
+    else:
+        activations = all_activations
+        labels = all_labels
 
     print(f"Loaded {len(activations)} samples")
     print(f"Activation shape: {activations.shape}")
@@ -255,8 +309,11 @@ def main(args):
             demo_val = demographic_values[idx].strip()
             print(f"  {demo_val}: {class_acc:.3f} ({class_mask.sum()} samples)")
 
-    # Save probe
-    output_dir = Path(config['paths']['results_dir']) / args.stage / 'probe'
+    # Save probe - use per-demographic directory when demographic is specified
+    if args.demographic:
+        output_dir = Path(config['paths']['results_dir']) / args.stage / demographic / 'probe'
+    else:
+        output_dir = Path(config['paths']['results_dir']) / args.stage / 'probe'
     output_dir.mkdir(parents=True, exist_ok=True)
 
     checkpoint = {
@@ -339,6 +396,14 @@ if __name__ == '__main__':
         type=int,
         default=10,
         help='Early stopping patience (in eval_steps)'
+    )
+    parser.add_argument(
+        '--demographic',
+        type=str,
+        default=None,
+        help='Demographic category to train probe for (e.g., 성별, 인종). '
+             'If not specified, uses config default. When specified, loads '
+             'per-demographic activations and saves probe to per-demographic directory.'
     )
     args = parser.parse_args()
 

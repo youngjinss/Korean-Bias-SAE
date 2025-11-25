@@ -101,19 +101,16 @@ From `data/demographic_dict_ko.json`:
 
 ```bash
 # Test gender bias (default)
-python scripts/02_generate_and_extract_activations.py --stage pilot
+python scripts/02_generate_and_extract_activations.py --stage pilot --demographic 성별
 
 # Test ethnic bias
-# (Edit configs/experiment_config.yaml first:
-#  demographic: "인종"
-#  demographic_values: [" 흑인", " 백인", " 아시아인"])
-python scripts/02_generate_and_extract_activations.py --stage pilot
+python scripts/02_generate_and_extract_activations.py --stage pilot --demographic 인종
 
 # Test age bias
-# (Edit configs/experiment_config.yaml:
-#  demographic: "나이"
-#  demographic_values: [" 젊은", " 늙은", " 십대", " 중년"])
-python scripts/02_generate_and_extract_activations.py --stage pilot
+python scripts/02_generate_and_extract_activations.py --stage pilot --demographic 나이
+
+# Run ALL demographics at once (recommended)
+python scripts/run_pipeline.py --stage pilot --demographic all
 ```
 
 ### Configuration
@@ -128,26 +125,31 @@ data:
 
 **Important:** All demographic values must have **leading spaces** for correct tokenization (e.g., `" 남자"` not `"남자"`).
 
-### Architecture: Fixed Output Dimension with Masking
+### Architecture: Per-Demographic Probes with Shared SAE
 
-The linear probe uses a **fixed output dimension of 10** (maximum across all demographics) with masking:
+Following the pattern from `korean-sparse-llm-features-open`, we train:
+- **ONE shared SAE** on merged activations from all demographics
+- **SEPARATE linear probes** for each demographic category
+
+This architecture is necessary because:
+- Each demographic has different label values (gender: male/female, race: white/black/etc.)
+- IG² attribution requires a probe that classifies the specific demographic
+- The SAE learns general sparse features, while probes specialize per demographic
 
 ```python
-from src.utils.demographic_utils import get_demographic_mask
+# One SAE trained on all demographics (shared feature extraction)
+sae = GatedAutoEncoder.from_pretrained('checkpoints/sae-gated_pilot_q2/model.pth')
 
-# Get mask for current demographic
-mask = get_demographic_mask("나이", max_output_dim=10)
-# Returns: [True, True, True, True, False, False, False, False, False, False]
-
-# Forward pass with masking
-logits = probe.forward(features, mask=mask)
-# Invalid positions are set to -inf, resulting in 0.0 probability
+# Separate probes for each demographic
+probe_gender = torch.load('results/pilot/성별/probe/linear_probe.pt')
+probe_race = torch.load('results/pilot/인종/probe/linear_probe.pt')
+probe_age = torch.load('results/pilot/나이/probe/linear_probe.pt')
 ```
 
 **Benefits:**
-- Single probe architecture for all 9 demographics
-- No need to retrain for different demographics
-- Transfer learning across demographics possible
+- Single SAE captures general features across all demographics
+- Each probe is optimized for its specific classification task
+- IG² attribution is computed per-demographic for accurate bias feature identification
 
 ---
 
@@ -403,59 +405,86 @@ print(f"Activation shape: {data['pilot_residual_q2'].shape}")
 ### Complete Pipeline (Ready to Run!)
 
 ```bash
-# Option 1: Run entire pipeline with bash script
+# Option 1: Run ALL demographics (recommended)
+python scripts/run_pipeline.py --stage pilot --demographic all
+
+# Option 2: Run single demographic
+python scripts/run_pipeline.py --stage pilot --demographic 성별
+
+# Option 3: Run with bash script
 bash scripts/run_pipeline.sh --stage pilot
 
-# Option 2: Run entire pipeline with Python script
-python scripts/run_pipeline.py --stage pilot
+# Option 4: Run steps individually for a specific demographic:
 
-# Option 3: Run steps individually:
+# 1. Generate and extract activations (per demographic)
+python scripts/02_generate_and_extract_activations.py --stage pilot --demographic 성별
 
-# 1. Generate and extract activations
-python scripts/02_generate_and_extract_activations.py --stage pilot
+# 2. Merge activations for SAE training (when using multiple demographics)
+python scripts/merge_activations.py --stage pilot
 
-# 2. Train SAE on answer-token activations
+# 3. Train SAE on merged activations (ONE shared SAE)
 python scripts/03_train_sae.py --stage pilot --sae_type gated --layer_quantile q2
 
-# 3. Train linear probe with demographic masking
-python scripts/04_train_linear_probe.py --stage pilot --sae_type gated --layer_quantile q2
+# 4. Train linear probe (SEPARATE probe per demographic)
+python scripts/04_train_linear_probe.py --stage pilot --sae_type gated --layer_quantile q2 --demographic 성별
 
-# 4. Compute IG² attribution (Bias-Neurons style)
-python scripts/05_compute_ig2.py --stage pilot --sae_type gated --layer_quantile q2
+# 5. Compute IG² attribution (per demographic)
+python scripts/05_compute_ig2.py --stage pilot --sae_type gated --layer_quantile q2 --demographic 성별
 
-# 5. Verify bias features with suppression/amplification
-python scripts/06_verify_bias_features.py --stage pilot --sae_type gated --layer_quantile q2
+# 6. Verify bias features (per demographic)
+python scripts/06_verify_bias_features.py --stage pilot --sae_type gated --layer_quantile q2 --demographic 성별
 ```
 
 ### Master Script Options
 
 ```bash
-# Run with custom parameters
-bash scripts/run_pipeline.sh \
+# Run ALL demographics end-to-end (recommended)
+python scripts/run_pipeline.py \
     --stage pilot \
+    --demographic all \
     --sae_type gated \
     --layer_quantile q2 \
     --num_steps 20
 
-# Skip optional steps
-bash scripts/run_pipeline.sh \
+# Run single demographic
+python scripts/run_pipeline.py \
     --stage pilot \
+    --demographic 성별
+
+# Skip optional steps
+python scripts/run_pipeline.py \
+    --stage pilot \
+    --demographic all \
     --skip-prerequisites \
     --skip-baseline
 
-# Resume from specific step (e.g., start from step 3)
+# Resume from specific step (e.g., start from step 4 after SAE training)
 python scripts/run_pipeline.py \
     --stage pilot \
-    --start-from 3
+    --demographic all \
+    --start-from 4
 
-# Run a single step
-bash scripts/run_step.sh 2 --stage pilot  # Run step 2 only
+# Run with bash script (single demographic only)
+bash scripts/run_pipeline.sh --stage pilot
 
 # Help
-bash scripts/run_pipeline.sh --help
 python scripts/run_pipeline.py --help
-bash scripts/run_step.sh  # Show available steps
+bash scripts/run_pipeline.sh --help
 ```
+
+### Pipeline Behavior with `--demographic all`
+
+When using `--demographic all`, the pipeline:
+
+1. **Step 2**: Extracts activations for EACH demographic separately
+   - Saves to `results/pilot/<demographic>/activations.pkl`
+2. **Step 2.5**: Merges all activations for SAE training
+   - Saves to `results/pilot/activations.pkl`
+3. **Step 3**: Trains ONE shared SAE on merged activations
+4. **Steps 4-6**: Loops through EACH demographic:
+   - Trains separate probe per demographic
+   - Computes IG² per demographic
+   - Verifies bias features per demographic
 
 ---
 
@@ -654,33 +683,52 @@ korean-bias-sae/
 │       └── assets/                   # Output directory
 ├── scripts/
 │   ├── run_pipeline.sh               # ⭐ Master pipeline script (bash)
-│   ├── run_pipeline.py               # ⭐ Master pipeline script (Python)
+│   ├── run_pipeline.py               # ⭐ Master pipeline script (Python, supports --demographic all)
 │   ├── 00_check_prerequisites.py     # ✅ Dependency check
 │   ├── 01_measure_baseline_bias.py   # ✅ Baseline measurement
-│   ├── 02_generate_and_extract_activations.py  # ✅ Generation-based extraction
-│   ├── 03_train_sae.py               # ✅ SAE training
-│   ├── 04_train_linear_probe.py      # ✅ Linear probe with masking
-│   ├── 05_compute_ig2.py             # ✅ IG² computation
-│   ├── 06_verify_bias_features.py    # ✅ Bias verification
-│   ├── merge_activations.py          # ✅ Merge multi-demographic activations
+│   ├── 02_generate_and_extract_activations.py  # ✅ Generation-based extraction (--demographic)
+│   ├── 03_train_sae.py               # ✅ SAE training (ONE shared SAE)
+│   ├── 04_train_linear_probe.py      # ✅ Linear probe (--demographic for per-demographic probe)
+│   ├── 05_compute_ig2.py             # ✅ IG² computation (--demographic for per-demographic)
+│   ├── 06_verify_bias_features.py    # ✅ Bias verification (--demographic for per-demographic)
+│   ├── merge_activations.py          # ✅ Merge multi-demographic activations for gSAE
 │   └── generate_mock_data.py         # ✅ Mock data for visualization testing
 ├── checkpoints/
-│   └── sae-gated_pilot_q2/           # Trained SAE models
+│   └── sae-gated_pilot_q2/           # ONE shared SAE model (trained on merged data)
 │       └── model.pth
 └── results/
     └── pilot/
-        ├── activations.pkl           # Generated activations (merged)
+        ├── activations.pkl           # Merged activations (for SAE training)
         ├── activations_metadata.json # Multi-demographic sample indices
-        ├── <demographic>/            # Per-demographic activations
-        │   └── activations.pkl
-        ├── probe/
-        │   └── linear_probe.pt       # Trained probe
-        ├── ig2/
-        │   └── ig2_results.pt        # IG² attribution scores
-        └── verification/
-            ├── suppression_test.json # Suppression results
-            ├── amplification_test.json # Amplification results
-            └── random_control.json   # Random control results
+        │
+        ├── 성별/                      # ⭐ Per-demographic results (gender)
+        │   ├── activations.pkl       # Gender-only activations
+        │   ├── probe/
+        │   │   └── linear_probe.pt   # Gender-specific probe
+        │   ├── ig2/
+        │   │   └── ig2_results.pt    # Gender bias features
+        │   └── verification/
+        │       ├── suppression_test.json
+        │       ├── amplification_test.json
+        │       └── random_control.json
+        │
+        ├── 인종/                      # ⭐ Per-demographic results (race)
+        │   ├── activations.pkl
+        │   ├── probe/
+        │   │   └── linear_probe.pt   # Race-specific probe
+        │   ├── ig2/
+        │   │   └── ig2_results.pt    # Race bias features
+        │   └── verification/
+        │       └── ...
+        │
+        └── 종교/                      # ⭐ Per-demographic results (religion)
+            ├── activations.pkl
+            ├── probe/
+            │   └── linear_probe.pt   # Religion-specific probe
+            ├── ig2/
+            │   └── ig2_results.pt    # Religion bias features
+            └── verification/
+                └── ...
 ```
 
 ---
@@ -787,6 +835,41 @@ korean-bias-sae/
 ---
 
 ## Recent Updates
+
+### 2025-11-25: Per-Demographic Pipeline Architecture
+
+**Major Architecture Update:**
+Following the pattern from `korean-sparse-llm-features-open`, the pipeline now correctly handles multiple demographics:
+
+- ✅ **ONE shared SAE** trained on merged activations from all demographics
+- ✅ **SEPARATE linear probes** for each demographic category
+- ✅ **Per-demographic IG² computation** using demographic-specific probes
+- ✅ **Per-demographic verification** results
+
+**Key Changes:**
+1. **`04_train_linear_probe.py`**: Added `--demographic` argument to train per-demographic probes
+2. **`05_compute_ig2.py`**: Added `--demographic` argument to compute IG² with correct probe
+3. **`06_verify_bias_features.py`**: Added `--demographic` argument for per-demographic verification
+4. **`run_pipeline.py`**: Steps 4-6 now loop through each demographic when using `--demographic all`
+
+**New Output Structure:**
+```
+results/pilot/
+├── activations.pkl              # Merged (for SAE)
+├── 성별/                         # Gender-specific results
+│   ├── probe/linear_probe.pt
+│   ├── ig2/ig2_results.pt
+│   └── verification/
+├── 인종/                         # Race-specific results
+│   └── ...
+└── 종교/                         # Religion-specific results
+    └── ...
+```
+
+**Why This Matters:**
+- Each demographic has different label values (gender: male/female, race: white/black/etc.)
+- IG² attribution requires a probe that classifies the specific demographic
+- This matches the original `korean-sparse-llm-features-open` approach
 
 ### 2025-11-25: Pipeline Complete & Verified
 
