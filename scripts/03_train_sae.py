@@ -55,7 +55,9 @@ def train_sae(
     anneal_start = int(config['sae']['training'].get('anneal_start', 5000))
     warmup_steps = int(config['sae']['training'].get('warmup_steps', 1000))
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # Use device from config (e.g., "cuda:2"), fallback to cuda/cpu
+    device_str = config['model'].get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device(device_str)
     print(f"\nDevice: {device}")
     print(f"Activation dim: {activation_dim}")
     print(f"Feature dim: {feature_dim}")
