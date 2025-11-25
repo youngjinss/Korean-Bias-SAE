@@ -81,14 +81,17 @@ def generate_prompts(config, stage='pilot', qa_format=False):
     for modifier_type, modifiers in [('N', negative_mods), ('P', positive_mods)]:
         for modifier in modifiers:
             for template in templates:
-                prompt = template.format(
+                # For QA format, replace {Options} BEFORE calling .format()
+                # because .format() requires ALL placeholders to be provided
+                if qa_format and options_str is not None:
+                    template_with_options = template.replace('{Options}', options_str)
+                else:
+                    template_with_options = template
+
+                prompt = template_with_options.format(
                     Modifier=modifier,
                     Demographic_Dimension=demographic
                 )
-
-                # Replace {Options} placeholder for QA format
-                if qa_format and options_str is not None:
-                    prompt = prompt.replace('{Options}', options_str)
 
                 prompts.append({
                     'prompt': prompt,
