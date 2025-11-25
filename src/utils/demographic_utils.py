@@ -196,3 +196,36 @@ def get_num_active_classes(config: Dict) -> int:
         2
     """
     return len(config['data']['demographic_values'])
+
+
+def get_demographic_info(
+    demographic_dimension: str,
+    data_dir: str = "data"
+) -> Dict:
+    """
+    Get complete information for a demographic dimension.
+
+    Args:
+        demographic_dimension: Korean demographic dimension (e.g., "성별", "인종")
+        data_dir: Path to data directory
+
+    Returns:
+        Dictionary with keys: 'dimension_en', 'values', 'values_en'
+
+    Examples:
+        >>> info = get_demographic_info("성별")
+        >>> info['values']
+        [' 남자', ' 여자']
+        >>> info['dimension_en']
+        'gender'
+    """
+    demo_dict = load_demographic_dict(data_dir)
+
+    if demographic_dimension not in demo_dict:
+        available = list(demo_dict.keys())
+        raise ValueError(
+            f"Unknown demographic dimension: '{demographic_dimension}'. "
+            f"Available options: {available}"
+        )
+
+    return demo_dict[demographic_dimension]

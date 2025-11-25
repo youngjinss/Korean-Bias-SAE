@@ -119,6 +119,60 @@ class EXAONEWrapper:
 
         return hidden
 
+    def get_hidden_states_at_position(
+        self,
+        text: Optional[str],
+        layer_idx: int,
+        token_position: int,
+        tokens: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        """
+        Extract hidden states at a specific token position.
+
+        This method is designed for extracting activations at the position where
+        the model generates a specific token (e.g., the answer token in bias prompts).
+
+        Args:
+            text: Input text (or None if tokens provided)
+            layer_idx: Layer index to extract from
+            token_position: Specific token position (integer index)
+            tokens: Pre-tokenized input (optional, shape: (seq_len,))
+
+        Returns:
+            Hidden states at the specified position: (1, hidden_dim)
+
+        Example:
+            >>> # Extract activation at position where model generates "남자"
+            >>> tokens, answer_pos = estimate_token_location(generated_text, "남자", tokenizer)
+            >>> hidden = model.get_hidden_states_at_position(
+            ...     text=None,
+            ...     layer_idx=15,
+            ...     token_position=answer_pos,
+            ...     tokens=tokens
+            ... )
+        """
+        if tokens is None:
+            if text is None:
+                raise ValueError("Either text or tokens must be provided")
+            inputs = self.tokenize(text)
+            tokens = inputs['input_ids'][0]  # Remove batch dimension
+        else:
+            # Ensure tokens is on correct device and has batch dimension
+            if tokens.dim() == 1:
+                tokens = tokens.unsqueeze(0)
+            inputs = {'input_ids': tokens.to(self.device)}
+
+        with torch.no_grad():
+            outputs = self.model(**inputs, output_hidden_states=True)
+
+        # Get hidden states from specified layer
+        hidden_states = outputs.hidden_states[layer_idx]  # (batch, seq_len, hidden_dim)
+
+        # Extract specific token position
+        hidden = hidden_states[:, token_position, :]  # (batch, hidden_dim)
+
+        return hidden
+
     def get_token_logits(
         self,
         text: str,

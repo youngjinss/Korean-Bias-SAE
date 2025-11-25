@@ -16,26 +16,33 @@ def compute_ig2_for_sae_features(
     sae_features: torch.Tensor,
     linear_probe: nn.Module,
     num_steps: int = 20,
-    use_squared_gap: bool = True,
+    use_squared_gap: bool = False,
     device: str = "cuda"
 ) -> torch.Tensor:
     """
-    Compute IG² attribution scores for SAE features.
+    Compute IG² attribution scores for SAE features following Bias-Neurons paper.
 
     This measures how much each SAE feature contributes to the logit gap
-    between two demographic predictions (e.g., 남자 vs 여자).
+    between two demographic predictions (e.g., male vs female).
+
+    Implementation follows the Bias-Neurons paper:
+    1. Compute IG² for each demographic class separately
+    2. Take the difference between demographics
+
+    IG²_gap(x) = IG²(x, demo1) - IG²(x, demo2)
+               = x * (∫∇f_demo1(αx)dα - ∫∇f_demo2(αx)dα)
 
     Args:
         sae_features: SAE feature activations (batch, feature_dim)
         linear_probe: Trained BiasProbe module
         num_steps: Number of integration steps (m in the paper)
-        use_squared_gap: Use (logit1 - logit2)^2 instead of |logit1 - logit2|
+        use_squared_gap: If True, use squared difference; if False, use absolute difference
         device: Device to compute on
 
     Returns:
         ig2_scores: Attribution score per feature (feature_dim,)
     """
-    logger.debug(f"Computing IG² with {num_steps} steps, squared_gap={use_squared_gap}")
+    logger.debug(f"Computing IG² with {num_steps} steps")
 
     # Move to device
     sae_features = sae_features.to(device)
@@ -44,44 +51,77 @@ def compute_ig2_for_sae_features(
 
     batch_size, feature_dim = sae_features.shape
 
-    # Detach and enable gradients
-    sae_features = sae_features.detach().clone().requires_grad_(True)
+    # Detach features
+    sae_features = sae_features.detach().clone()
 
-    # Accumulate gradients across integration steps
-    ig2_scores = torch.zeros(feature_dim, device=device)
+    # Baseline: zero features
+    baseline = torch.zeros_like(sae_features)
 
-    for k in range(1, num_steps + 1):
-        # Interpolation coefficient
-        alpha = k / num_steps
+    # Step size for integration
+    step = (sae_features - baseline) / num_steps
 
-        # Scale features by alpha
-        scaled_features = alpha * sae_features
-        scaled_features.requires_grad_(True)
+    # Compute IG² for demographic 1 (class 0)
+    ig2_demo1 = torch.zeros(feature_dim, device=device)
 
-        # Forward pass through probe
-        logits = linear_probe(scaled_features)  # (batch, 2)
+    for i in range(num_steps):
+        # Scaled input from baseline to actual features
+        scaled_features = (baseline + step * i).requires_grad_(True)
 
-        # Compute logit gap
-        if use_squared_gap:
-            # Use squared difference (always differentiable)
-            logit_gap = (logits[:, 0] - logits[:, 1]) ** 2
-        else:
-            # Use absolute difference with smooth approximation
-            eps = 1e-8
-            logit_gap = torch.sqrt((logits[:, 0] - logits[:, 1]) ** 2 + eps)
+        # Forward pass
+        logits = linear_probe(scaled_features)  # (batch, output_dim)
 
-        # Backward pass to get gradients
-        logit_gap.sum().backward()
+        # Get logits for demographic 1 (class 0)
+        logits_demo1 = logits[:, 0]
+
+        # Backward to get gradients
+        gradients = torch.autograd.grad(
+            outputs=logits_demo1.sum(),
+            inputs=scaled_features,
+            create_graph=False,
+            retain_graph=False
+        )[0]
 
         # Accumulate gradients (sum across batch)
-        ig2_scores += scaled_features.grad.sum(dim=0)
+        ig2_demo1 += gradients.sum(dim=0)
 
-        # Zero gradients for next iteration
-        scaled_features.grad.zero_()
+    # Multiply by step and average feature value
+    ig2_demo1 = (sae_features.mean(dim=0) * ig2_demo1 / num_steps)
 
-    # Final IG² computation
-    # IG²(feature_i) = feature_i × (1/m) × Σ gradients
-    ig2_scores = (sae_features.detach().mean(dim=0) / num_steps) * ig2_scores
+    # Compute IG² for demographic 2 (class 1)
+    ig2_demo2 = torch.zeros(feature_dim, device=device)
+
+    for i in range(num_steps):
+        # Scaled input from baseline to actual features
+        scaled_features = (baseline + step * i).requires_grad_(True)
+
+        # Forward pass
+        logits = linear_probe(scaled_features)  # (batch, output_dim)
+
+        # Get logits for demographic 2 (class 1)
+        logits_demo2 = logits[:, 1]
+
+        # Backward to get gradients
+        gradients = torch.autograd.grad(
+            outputs=logits_demo2.sum(),
+            inputs=scaled_features,
+            create_graph=False,
+            retain_graph=False
+        )[0]
+
+        # Accumulate gradients (sum across batch)
+        ig2_demo2 += gradients.sum(dim=0)
+
+    # Multiply by step and average feature value
+    ig2_demo2 = (sae_features.mean(dim=0) * ig2_demo2 / num_steps)
+
+    # Compute gap: IG²(demo1) - IG²(demo2)
+    ig2_gap = ig2_demo1 - ig2_demo2
+
+    # Take absolute value or square the gap
+    if use_squared_gap:
+        ig2_scores = ig2_gap ** 2
+    else:
+        ig2_scores = torch.abs(ig2_gap)
 
     logger.debug(f"IG² computation complete. Score range: [{ig2_scores.min():.4f}, {ig2_scores.max():.4f}]")
 

@@ -1,7 +1,7 @@
 """Utility modules for the bias detection pipeline."""
 
 from .experiment_utils import ExperimentLogger, load_config, set_seed
-from .data_utils import save_jsonl, load_jsonl
+from .data_utils import save_jsonl, load_jsonl, save_json, load_json
 from .prompt_generation import generate_stage_prompts, load_modifiers, load_templates
 from .demographic_utils import (
     load_demographic_dict,
@@ -17,6 +17,8 @@ __all__ = [
     'set_seed',
     'save_jsonl',
     'load_jsonl',
+    'save_json',
+    'load_json',
     'generate_stage_prompts',
     'load_modifiers',
     'load_templates',
