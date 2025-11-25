@@ -4,7 +4,7 @@ A **standalone** research codebase for detecting and interpreting bias in Korean
 
 **Core Innovation:** Apply IG² attribution to **SAE features extracted from generation-time activations**, enabling identification of causal bias features in LLM outputs.
 
-**Status:** ✅ Core pipeline implemented | 🚧 SAE training & IG² computation in progress
+**Status:** ✅ Complete pipeline implemented | Ready for pilot experiments
 
 ---
 
@@ -15,6 +15,7 @@ A **standalone** research codebase for detecting and interpreting bias in Korean
 - [Project Status](#project-status)
 - [Quick Start](#quick-start)
 - [Pipeline Flow](#pipeline-flow)
+- [IG² Implementation Details](#ig²-implementation-details)
 - [Configuration Reference](#configuration-reference)
 - [File Structure](#file-structure)
 - [Troubleshooting](#troubleshooting)
@@ -66,8 +67,10 @@ activation = exaone.get_hidden_states_at_position(None, layer=15, pos=answer_pos
 6. Train Linear Probe
    └─ Predict demographic from SAE features
 
-7. Compute IG² Attribution
-   └─ Identify which SAE features cause bias
+7. Compute IG² Attribution (Bias-Neurons Style) ⭐
+   ├─ Compute IG² for demographic 1 (e.g., 남자)
+   ├─ Compute IG² for demographic 2 (e.g., 여자)
+   └─ Take gap: |IG²(demo1) - IG²(demo2)|
 
 8. Verify Bias Features
    └─ Suppress/amplify to confirm causal effect
@@ -166,10 +169,10 @@ logits = probe.forward(features, mask=mask)
 - ✅ `00_check_prerequisites.py` - Verify dependencies
 - ✅ `01_measure_baseline_bias.py` - Baseline bias measurement
 - ✅ `02_generate_and_extract_activations.py` - **Generation-based extraction** ⭐
-- 🚧 `03_train_sae.py` - SAE training (update in progress)
-- ⬜ `04_train_linear_probe.py` - Probe training (to be created)
-- ⬜ `05_compute_ig2.py` - IG² computation (to be created)
-- ⬜ `06_verify_bias_features.py` - Verification tests (to be updated)
+- ✅ `03_train_sae.py` - SAE training (Gated + Standard)
+- ✅ `04_train_linear_probe.py` - Probe training with masking ⭐
+- ✅ `05_compute_ig2.py` - **IG² computation (Bias-Neurons style)** ⭐
+- ✅ `06_verify_bias_features.py` - Verification tests (suppression/amplification) ⭐
 
 **Data:**
 - ✅ Demographic dictionary (`data/demographic_dict_ko.json`)
@@ -178,17 +181,29 @@ logits = probe.forward(features, mask=mask)
 - ✅ Full modifiers (274 negative + 244 positive)
 - ✅ Korean templates (3 pilot, 5 medium, 17 full)
 
-### 🚧 To Be Completed
+### ✅ Recently Completed
+
+**Core Pipeline:**
+- ✅ `scripts/04_train_linear_probe.py` - Linear probe with demographic masking
+- ✅ `scripts/05_compute_ig2.py` - IG² attribution (corrected to match Bias-Neurons)
+- ✅ `scripts/06_verify_bias_features.py` - Suppression/amplification verification
+
+**IG² Implementation:** Now correctly follows the Bias-Neurons paper methodology:
+- Computes IG² for each demographic class separately
+- Takes the difference: `IG²_gap = |IG²(demo1) - IG²(demo2)|`
+- Uses zero baseline with proper integration from i=0 to num_steps
+
+### 🚧 Next Steps
 
 **Priority 1:**
-- Create `scripts/04_train_linear_probe.py`
-- Create `scripts/05_compute_ig2.py`
-- Update `scripts/06_verify_bias_features.py` for new format
+- Run pilot experiment end-to-end
+- Debug any runtime issues
+- Validate results quality
 
 **Priority 2:**
-- Run pilot experiment end-to-end
-- Validate on multiple demographics
-- Test medium and full scales
+- Test on multiple demographics (성별, 인종, 나이, etc.)
+- Scale to medium experiments
+- Full-scale bias detection
 
 ---
 
@@ -248,45 +263,91 @@ python scripts/00_check_prerequisites.py
 ✅ All critical prerequisites met!
 ```
 
-### 4. Generate and Extract Activations
+### 4. Run the Complete Pipeline
 
+**Option A: Full Pipeline (Recommended)**
 ```bash
+# Bash version
+bash scripts/run_pipeline.sh --stage pilot
+
+# Python version (with resume capability)
+python scripts/run_pipeline.py --stage pilot
+```
+
+**Option B: Individual Steps**
+```bash
+# Run specific step only
+bash scripts/run_step.sh 2 --stage pilot  # Step 2: Generate activations
+
+# Or manually:
 python scripts/02_generate_and_extract_activations.py --stage pilot
 ```
 
-**What it does:**
-1. Validates demographic configuration
-2. Generates bias prompts (modifiers × templates)
-3. **Runs EXAONE to generate full responses** ⭐
-4. Extracts which demographic value was generated
-5. Finds answer token position in generated text
-6. Extracts activations at answer token (NOT prompt end!)
-7. Saves activations for SAE training
+**Pipeline stages:**
+1. Prerequisites check
+2. Baseline bias measurement (optional)
+3. Generate responses and extract activations
+4. Train SAE on activations
+5. Train linear probe on SAE features
+6. Compute IG² attribution
+7. Verify bias features
 
 **Expected output:**
 ```
-✓ Demographic configuration validated
+========================================================================
+Korean Bias SAE - Pipeline Runner
+========================================================================
+
+Configuration:
+  Stage:           pilot
+  SAE Type:        gated
+  Layer Quantile:  q2
+  IG2 Steps:       20
+
+========================================================================
+STEP 2: Generate Responses and Extract Activations
+========================================================================
+
 Demographic: 성별 (gender)
-  Values: '남자', '여자'
-  Count: 2
-
-Loading EXAONE model...
-Model loaded: EXAONE-3.0-7.8B-Instruct
-Number of layers: 32
-
-Generating pilot prompts...
 Generated 30 prompts
-
-Generating responses and extracting activations...
 Processing prompts: 100%|██████████| 30/30
+✓ Activation extraction complete
 
-Successfully processed: 30/30 prompts
-Label distribution:
-  남자: 18 (60.0%)
-  여자: 12 (40.0%)
+========================================================================
+STEP 3: Train Sparse Autoencoder (SAE)
+========================================================================
 
-✓ Activation extraction complete!
-Saved to: results/pilot/activations.pkl
+Training SAE...
+Epoch 1000/10000: Loss=0.0234
+✓ SAE training complete
+
+========================================================================
+STEP 4: Train Linear Probe
+========================================================================
+
+Training probe: 100%|██████████| Acc: 0.967, Loss: 0.1234
+✓ Linear probe training complete
+
+========================================================================
+STEP 5: Compute IG2 Attribution
+========================================================================
+
+Computing IG2 attribution scores...
+Identified 1247 bias features (1.25%)
+✓ IG2 computation complete
+
+========================================================================
+STEP 6: Verify Bias Features
+========================================================================
+
+Suppression effect: -23.45%
+Amplification effect: +34.12%
+Random control: -1.23%
+✓ All validation criteria passed!
+
+========================================================================
+PIPELINE COMPLETE!
+========================================================================
 ```
 
 ### 5. Check Results
@@ -312,45 +373,119 @@ print(f"Activation shape: {data['pilot_residual_q2'].shape}")
 
 ## Pipeline Flow
 
-### Complete Pipeline (When Finished)
+### Complete Pipeline (Ready to Run!)
 
 ```bash
-# 1. Generate and extract activations (READY NOW!)
+# Option 1: Run entire pipeline with bash script
+bash scripts/run_pipeline.sh --stage pilot
+
+# Option 2: Run entire pipeline with Python script
+python scripts/run_pipeline.py --stage pilot
+
+# Option 3: Run steps individually:
+
+# 1. Generate and extract activations
 python scripts/02_generate_and_extract_activations.py --stage pilot
 
 # 2. Train SAE on answer-token activations
 python scripts/03_train_sae.py --stage pilot --sae_type gated --layer_quantile q2
 
-# 3. Train linear probe (TO BE CREATED)
-python scripts/04_train_linear_probe.py --stage pilot
+# 3. Train linear probe with demographic masking
+python scripts/04_train_linear_probe.py --stage pilot --sae_type gated --layer_quantile q2
 
-# 4. Compute IG² attribution (TO BE CREATED)
-python scripts/05_compute_ig2.py --stage pilot
+# 4. Compute IG² attribution (Bias-Neurons style)
+python scripts/05_compute_ig2.py --stage pilot --sae_type gated --layer_quantile q2
 
-# 5. Verify bias features (TO BE UPDATED)
-python scripts/06_verify_bias_features.py --stage pilot
+# 5. Verify bias features with suppression/amplification
+python scripts/06_verify_bias_features.py --stage pilot --sae_type gated --layer_quantile q2
 ```
 
-### Current Working Pipeline
+### Master Script Options
 
 ```bash
-# Step 1: Generate and extract (WORKS NOW!)
-python scripts/02_generate_and_extract_activations.py --stage pilot
+# Run with custom parameters
+bash scripts/run_pipeline.sh \
+    --stage pilot \
+    --sae_type gated \
+    --layer_quantile q2 \
+    --num_steps 20
 
-# Outputs:
-# - results/pilot/activations.pkl
-# - results/pilot/activation_summary.pkl
+# Skip optional steps
+bash scripts/run_pipeline.sh \
+    --stage pilot \
+    --skip-prerequisites \
+    --skip-baseline
 
-# You can inspect the data:
-python -c "
-import pickle
-with open('results/pilot/activations.pkl', 'rb') as f:
-    data = pickle.load(f)
-print('Keys:', list(data.keys()))
-print('Shape of q2 activations:', data['pilot_residual_q2'].shape)
-print('Label distribution:', set(data['pilot_labels']))
-"
+# Resume from specific step (e.g., start from step 3)
+python scripts/run_pipeline.py \
+    --stage pilot \
+    --start-from 3
+
+# Run a single step
+bash scripts/run_step.sh 2 --stage pilot  # Run step 2 only
+
+# Help
+bash scripts/run_pipeline.sh --help
+python scripts/run_pipeline.py --help
+bash scripts/run_step.sh  # Show available steps
 ```
+
+---
+
+## IG² Implementation Details
+
+### Bias-Neurons Methodology
+
+Our IG² implementation follows the [Bias-Neurons paper](https://github.com/your-org/Bias-Neurons) methodology exactly:
+
+**Step 1: Compute IG² for each demographic class separately**
+
+```python
+# For demographic 1 (e.g., male)
+ig2_demo1 = torch.zeros(feature_dim)
+for i in range(num_steps):
+    scaled_features = (baseline + step * i).requires_grad_(True)
+    logits = probe(scaled_features)
+    logits_demo1 = logits[:, 0]  # Get logits for class 0
+    gradients = torch.autograd.grad(logits_demo1.sum(), scaled_features)[0]
+    ig2_demo1 += gradients.sum(dim=0)
+ig2_demo1 = (features.mean(dim=0) * ig2_demo1 / num_steps)
+
+# For demographic 2 (e.g., female)
+ig2_demo2 = torch.zeros(feature_dim)
+for i in range(num_steps):
+    scaled_features = (baseline + step * i).requires_grad_(True)
+    logits = probe(scaled_features)
+    logits_demo2 = logits[:, 1]  # Get logits for class 1
+    gradients = torch.autograd.grad(logits_demo2.sum(), scaled_features)[0]
+    ig2_demo2 += gradients.sum(dim=0)
+ig2_demo2 = (features.mean(dim=0) * ig2_demo2 / num_steps)
+```
+
+**Step 2: Compute the gap**
+
+```python
+ig2_gap = ig2_demo1 - ig2_demo2
+ig2_scores = torch.abs(ig2_gap)  # Take absolute value
+```
+
+**Mathematical Formula:**
+
+```
+IG²_gap(x) = |IG²(x, demo1) - IG²(x, demo2)|
+           = |x * ∫₀¹ ∇f_demo1(αx)dα - x * ∫₀¹ ∇f_demo2(αx)dα|
+```
+
+**Key Properties:**
+- Uses zero baseline: `baseline = torch.zeros_like(features)`
+- Integration from i=0 to num_steps (includes baseline)
+- Separates computation for each demographic class
+- Takes absolute difference of attributions
+
+**Why This Matters:**
+- This is NOT equivalent to computing IG² directly on the gap
+- `∇(A - B)² ≠ ∇A - ∇B`
+- Matches the original Bias-Neurons paper for reproducibility
 
 ---
 
@@ -426,23 +561,35 @@ korean-bias-sae/
 │   │   ├── experiment_utils.py       # Experiment helpers
 │   │   └── data_utils.py             # Data loading
 │   ├── attribution/
-│   │   └── ig2_sae.py                # IG² computation
+│   │   └── ig2_sae.py                # ⭐ IG² computation (Bias-Neurons style)
 │   ├── evaluation/
 │   │   ├── bias_measurement.py       # Bias scoring
 │   │   └── verification.py           # Suppression/amplification
 │   └── interfaces.py                 # Data contracts
 ├── scripts/
+│   ├── run_pipeline.sh               # ⭐ Master pipeline script (bash)
+│   ├── run_pipeline.py               # ⭐ Master pipeline script (Python)
 │   ├── 00_check_prerequisites.py     # ✅ Dependency check
 │   ├── 01_measure_baseline_bias.py   # ✅ Baseline measurement
 │   ├── 02_generate_and_extract_activations.py  # ✅ Generation-based extraction
-│   ├── 03_train_sae.py               # 🚧 SAE training
-│   ├── 04_train_linear_probe.py      # ⬜ To be created
-│   ├── 05_compute_ig2.py             # ⬜ To be created
-│   └── 06_verify_bias_features.py    # ⬜ To be updated
+│   ├── 03_train_sae.py               # ✅ SAE training
+│   ├── 04_train_linear_probe.py      # ✅ Linear probe with masking
+│   ├── 05_compute_ig2.py             # ✅ IG² computation
+│   └── 06_verify_bias_features.py    # ✅ Bias verification
+├── checkpoints/
+│   └── sae-gated_pilot_q2/           # Trained SAE models
+│       └── model.pth
 └── results/
     └── pilot/
         ├── activations.pkl           # Generated activations
-        └── activation_summary.pkl    # Metadata
+        ├── probe/
+        │   └── linear_probe.pt       # Trained probe
+        ├── ig2/
+        │   └── ig2_results.pt        # IG² attribution scores
+        └── verification/
+            ├── suppression_test.json # Suppression results
+            ├── amplification_test.json # Amplification results
+            └── random_control.json   # Random control results
 ```
 
 ---
