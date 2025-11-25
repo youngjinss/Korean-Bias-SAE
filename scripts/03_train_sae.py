@@ -198,7 +198,7 @@ def main():
     parser.add_argument("--activations", type=str, default=None,
                        help="Path to activations file (default: results/{stage}/activations.pkl)")
     parser.add_argument("--output", type=str, default=None,
-                       help="Output directory (default: checkpoints/sae-{sae_type}_{stage}_{layer_quantile}/)")
+                       help="Output directory (default: results/models/sae-{sae_type}_{stage}_{layer_quantile}/)")
     parser.add_argument("--steps", type=int, default=None,
                        help="Override total training steps")
     parser.add_argument("--batch-size", type=int, default=None,
@@ -222,7 +222,7 @@ def main():
         activations_path = Path(args.activations)
 
     if args.output is None:
-        output_dir = PROJECT_ROOT / "checkpoints" / f"sae-{args.sae_type}_{args.stage}_{args.layer_quantile}"
+        output_dir = PROJECT_ROOT / "results" / "models" / f"sae-{args.sae_type}_{args.stage}_{args.layer_quantile}"
     else:
         output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)

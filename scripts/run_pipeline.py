@@ -678,7 +678,7 @@ def main():
         print(f"  - Per-demographic activations: results/{args.stage}/<demographic>/activations.pkl")
         print(f"  - Merged Activations:          results/{args.stage}/activations.pkl")
         print(f"  - Metadata:                    results/{args.stage}/activations_metadata.json")
-        print(f"  - SAE Model (shared):          checkpoints/sae-{args.sae_type}_{args.stage}_{args.layer_quantile}/model.pth")
+        print(f"  - SAE Model (shared):          results/models/sae-{args.sae_type}_{args.stage}_{args.layer_quantile}/model.pth")
         print(f"  - Per-demographic outputs:")
         for demo in demographics:
             print(f"      {demo}:")
@@ -688,7 +688,7 @@ def main():
     else:
         demo_name = demographics[0] if demographics else 'default'
         print(f"  - Activations:         results/{args.stage}/{demo_name}/activations.pkl")
-        print(f"  - SAE Model:           checkpoints/sae-{args.sae_type}_{args.stage}_{args.layer_quantile}/model.pth")
+        print(f"  - SAE Model:           results/models/sae-{args.sae_type}_{args.stage}_{args.layer_quantile}/model.pth")
         print(f"  - Linear Probe:        results/{args.stage}/{demo_name}/probe/linear_probe.pt")
         print(f"  - IG2 Results:         results/{args.stage}/{demo_name}/ig2/ig2_results.pt")
         print(f"  - Verification:        results/{args.stage}/{demo_name}/verification/")

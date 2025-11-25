@@ -138,7 +138,7 @@ This architecture is necessary because:
 
 ```python
 # One SAE trained on all demographics (shared feature extraction)
-sae = GatedAutoEncoder.from_pretrained('checkpoints/sae-gated_pilot_q2/model.pth')
+sae = GatedAutoEncoder.from_pretrained('results/models/sae-gated_pilot_q2/model.pth')
 
 # Separate probes for each demographic
 probe_gender = torch.load('results/pilot/성별/probe/linear_probe.pt')
@@ -693,10 +693,11 @@ korean-bias-sae/
 │   ├── 06_verify_bias_features.py    # ✅ Bias verification (--demographic for per-demographic)
 │   ├── merge_activations.py          # ✅ Merge multi-demographic activations for gSAE
 │   └── generate_mock_data.py         # ✅ Mock data for visualization testing
-├── checkpoints/
-│   └── sae-gated_pilot_q2/           # ONE shared SAE model (trained on merged data)
-│       └── model.pth
 └── results/
+    ├── models/                        # SAE models
+    │   └── sae-gated_pilot_q2/       # ONE shared SAE model (trained on merged data)
+    │       └── model.pth
+    │
     └── pilot/
         ├── activations.pkl           # Merged activations (for SAE training)
         ├── activations_metadata.json # Multi-demographic sample indices

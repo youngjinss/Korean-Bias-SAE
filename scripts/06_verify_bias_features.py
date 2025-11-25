@@ -321,7 +321,7 @@ def main(args):
     print(f"Loaded {len(activations)} samples")
 
     # Load SAE
-    sae_path = Path(config['paths']['checkpoints_dir']) / f'sae-{args.sae_type}_{args.stage}_{args.layer_quantile}' / 'model.pth'
+    sae_path = Path(config['paths']['models_dir']) / f'sae-{args.sae_type}_{args.stage}_{args.layer_quantile}' / 'model.pth'
 
     if not sae_path.exists():
         print(f"\n❌ ERROR: SAE model not found")
