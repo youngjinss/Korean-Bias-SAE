@@ -41,19 +41,19 @@ def train_sae(
     print("Training Gated Sparse Autoencoder")
     print("=" * 80)
 
-    # Extract config
-    activation_dim = config['sae']['activation_dim']
-    feature_dim = config['sae']['feature_dim']
-    total_steps = config['sae']['training']['total_steps']
-    batch_size = config['sae']['training']['batch_size']
-    lr = config['sae']['training']['learning_rate']
+    # Extract config (ensure numeric types - YAML may parse 1e-4 as string)
+    activation_dim = int(config['sae']['activation_dim'])
+    feature_dim = int(config['sae']['feature_dim'])
+    total_steps = int(config['sae']['training']['total_steps'])
+    batch_size = int(config['sae']['training']['batch_size'])
+    lr = float(config['sae']['training']['learning_rate'])
 
     # Sparsity config
-    sparsity_penalty = config['sae']['training']['sparsity_penalty']
-    p_start = config['sae']['training'].get('p_start', 1.0)
-    p_end = config['sae']['training'].get('p_end', 0.0)
-    anneal_start = config['sae']['training'].get('anneal_start', 5000)
-    warmup_steps = config['sae']['training'].get('warmup_steps', 1000)
+    sparsity_penalty = float(config['sae']['training']['sparsity_penalty'])
+    p_start = float(config['sae']['training'].get('p_start', 1.0))
+    p_end = float(config['sae']['training'].get('p_end', 0.0))
+    anneal_start = int(config['sae']['training'].get('anneal_start', 5000))
+    warmup_steps = int(config['sae']['training'].get('warmup_steps', 1000))
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"\nDevice: {device}")
