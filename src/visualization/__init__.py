@@ -9,7 +9,15 @@ This module provides tools for visualizing:
 - SAE training loss curves
 """
 
-from .font_utils import setup_korean_font
+from .font_utils import (
+    setup_korean_font,
+    get_available_korean_fonts,
+    find_best_korean_font,
+    download_and_install_noto_font,
+    test_korean_font,
+    ensure_korean_font,
+    get_korean_font_path
+)
 from .data_loaders import (
     load_sae_features,
     load_ig2_results,
@@ -41,6 +49,12 @@ from .plotting_utils import (
 __all__ = [
     # Font setup
     'setup_korean_font',
+    'get_available_korean_fonts',
+    'find_best_korean_font',
+    'download_and_install_noto_font',
+    'test_korean_font',
+    'ensure_korean_font',
+    'get_korean_font_path',
     # Data loaders
     'load_sae_features',
     'load_ig2_results',
