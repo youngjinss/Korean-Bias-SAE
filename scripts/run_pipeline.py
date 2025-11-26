@@ -293,6 +293,58 @@ def run_script(script_path: Path, args: List[str]) -> bool:
         log_error(f"Unexpected error: {e}")
         return False
 
+
+def check_sae_exists(stage: str, sae_type: str, layer_quantile: str) -> bool:
+    """Check if SAE model already exists for given configuration."""
+    sae_path = PROJECT_ROOT / 'results' / 'models' / f'sae-{sae_type}_{stage}_{layer_quantile}' / 'model.pth'
+    return sae_path.exists()
+
+
+def check_probe_exists(stage: str, demographic: str, layer_quantile: str = None) -> bool:
+    """Check if linear probe already exists for given configuration."""
+    if layer_quantile:
+        # Per-layer probe path (for multi-layer mode)
+        probe_path = PROJECT_ROOT / 'results' / stage / demographic / 'probe' / f'{layer_quantile}_linear_probe.pt'
+        if probe_path.exists():
+            return True
+    # Standard probe path
+    probe_path = PROJECT_ROOT / 'results' / stage / demographic / 'probe' / 'linear_probe.pt'
+    return probe_path.exists()
+
+
+def check_ig2_exists(stage: str, demographic: str, layer_quantile: str = None) -> bool:
+    """Check if IG2 results already exist for given configuration."""
+    if layer_quantile:
+        # Per-layer IG2 path (for multi-layer mode)
+        ig2_path = PROJECT_ROOT / 'results' / stage / demographic / 'ig2' / f'{layer_quantile}_ig2_results.pt'
+        if ig2_path.exists():
+            return True
+    # Standard IG2 path
+    ig2_path = PROJECT_ROOT / 'results' / stage / demographic / 'ig2' / 'ig2_results.pt'
+    return ig2_path.exists()
+
+
+def check_verification_exists(stage: str, demographic: str, layer_quantile: str = None) -> bool:
+    """Check if verification results already exist for given configuration."""
+    if layer_quantile:
+        # Per-layer verification path
+        verify_dir = PROJECT_ROOT / 'results' / stage / demographic / 'verification' / layer_quantile
+    else:
+        verify_dir = PROJECT_ROOT / 'results' / stage / demographic / 'verification'
+    # Check if directory exists and has content
+    if verify_dir.exists():
+        return any(verify_dir.iterdir())
+    return False
+
+
+def check_activations_exist(stage: str, demographic: str = None) -> bool:
+    """Check if activations already exist for given configuration."""
+    if demographic:
+        act_path = PROJECT_ROOT / 'results' / stage / demographic / 'activations.pkl'
+    else:
+        act_path = PROJECT_ROOT / 'results' / stage / 'activations.pkl'
+    return act_path.exists()
+
 def main():
     parser = argparse.ArgumentParser(
         description="Run the complete Korean Bias SAE pipeline"
@@ -533,7 +585,14 @@ def main():
             if layer_mode == 'all':
                 # Train SAE for each layer
                 log_info(f"Training SAE for {len(layer_quantiles)} layer quantiles...")
+                skipped_count = 0
                 for j, lq in enumerate(layer_quantiles):
+                    # Check if SAE already exists
+                    if check_sae_exists(args.stage, args.sae_type, lq):
+                        log_warning(f"[{j+1}/{len(layer_quantiles)}] SAE for layer {lq} already exists, skipping...")
+                        skipped_count += 1
+                        continue
+
                     print(f"\n  [{j+1}/{len(layer_quantiles)}] Training SAE for layer {lq}...")
                     sae_args = ['--stage', args.stage, '--sae_type', args.sae_type, '--layer_quantile', lq]
                     success = run_script(scripts_dir / '03_train_sae.py', sae_args)
@@ -546,20 +605,29 @@ def main():
                 # Check if all SAEs were trained
                 sae_failures = [f for f in failed_steps if f[0] == 3]
                 if not sae_failures:
-                    log_success("Step 3 completed - All SAEs trained")
+                    if skipped_count > 0:
+                        log_success(f"Step 3 completed - {skipped_count} SAE(s) skipped (already exist)")
+                    else:
+                        log_success("Step 3 completed - All SAEs trained")
                 else:
                     log_error(f"Step 3 partially failed - {len(sae_failures)} SAE(s) failed")
                     critical_failures.extend(sae_failures)
             else:
                 # Single layer
-                sae_args = ['--stage', args.stage, '--sae_type', args.sae_type, '--layer_quantile', layer_quantiles[0]]
-                success = run_script(scripts_dir / '03_train_sae.py', sae_args)
-                if success:
-                    log_success("Step 3 completed")
+                lq = layer_quantiles[0]
+                # Check if SAE already exists
+                if check_sae_exists(args.stage, args.sae_type, lq):
+                    log_warning(f"SAE for layer {lq} already exists, skipping...")
+                    log_success("Step 3 skipped (SAE exists)")
                 else:
-                    log_error("Step 3 failed (critical, stopping)")
-                    failed_steps.append((3, 'Train SAE', False))
-                    critical_failures.append((3, 'Train SAE', False))
+                    sae_args = ['--stage', args.stage, '--sae_type', args.sae_type, '--layer_quantile', lq]
+                    success = run_script(scripts_dir / '03_train_sae.py', sae_args)
+                    if success:
+                        log_success("Step 3 completed")
+                    else:
+                        log_error("Step 3 failed (critical, stopping)")
+                        failed_steps.append((3, 'Train SAE', False))
+                        critical_failures.append((3, 'Train SAE', False))
 
         # === STEP 4: Train Linear Probe ===
         # Note: For 'all' mode, we train SEPARATE probes for each demographic
@@ -570,6 +638,7 @@ def main():
             log_step(4, "Train Linear Probe")
             update_step_status(4, "Train Linear Probe")
 
+            skipped_count = 0
             # Determine iteration scope
             if layer_mode == 'all' and demographic_mode == 'all':
                 # Full matrix: all layers × all demographics
@@ -579,6 +648,12 @@ def main():
                 for lq in layer_quantiles:
                     for demo in demographics:
                         count += 1
+                        # Check if probe already exists
+                        if check_probe_exists(args.stage, demo, lq):
+                            log_warning(f"[{count}/{total}] Probe for {lq} × {demo} already exists, skipping...")
+                            skipped_count += 1
+                            continue
+
                         print(f"\n  [{count}/{total}] Training probe for {lq} × {demo}...")
                         probe_args = ['--stage', args.stage, '--sae_type', args.sae_type,
                                      '--layer_quantile', lq, '--demographic', demo]
@@ -594,6 +669,12 @@ def main():
                 log_info(f"Training probes for {len(layer_quantiles)} layer quantiles...")
                 demo = demographics[0] if demographics else None
                 for j, lq in enumerate(layer_quantiles):
+                    # Check if probe already exists
+                    if demo and check_probe_exists(args.stage, demo, lq):
+                        log_warning(f"[{j+1}/{len(layer_quantiles)}] Probe for layer {lq} already exists, skipping...")
+                        skipped_count += 1
+                        continue
+
                     print(f"\n  [{j+1}/{len(layer_quantiles)}] Training probe for layer {lq}...")
                     probe_args = ['--stage', args.stage, '--sae_type', args.sae_type, '--layer_quantile', lq]
                     if demo:
@@ -610,6 +691,12 @@ def main():
                 log_info(f"Training probes for {len(demographics)} demographic categories...")
                 lq = layer_quantiles[0]
                 for i, demo in enumerate(demographics):
+                    # Check if probe already exists
+                    if check_probe_exists(args.stage, demo):
+                        log_warning(f"[{i+1}/{len(demographics)}] Probe for {demo} already exists, skipping...")
+                        skipped_count += 1
+                        continue
+
                     print(f"\n  [{i+1}/{len(demographics)}] Training probe for {demo}...")
                     probe_args = ['--stage', args.stage, '--sae_type', args.sae_type,
                                  '--layer_quantile', lq, '--demographic', demo]
@@ -621,16 +708,23 @@ def main():
                         log_success(f"Completed probe for {demo}")
             else:
                 # Single layer, single demographic
-                probe_args = ['--stage', args.stage, '--sae_type', args.sae_type, '--layer_quantile', layer_quantiles[0]]
-                if demographics:
-                    probe_args.extend(['--demographic', demographics[0]])
-                success = run_script(scripts_dir / '04_train_linear_probe.py', probe_args)
-                if success:
-                    log_success("Step 4 completed")
+                demo = demographics[0] if demographics else None
+                lq = layer_quantiles[0]
+                # Check if probe already exists
+                if demo and check_probe_exists(args.stage, demo):
+                    log_warning(f"Probe for {demo} already exists, skipping...")
+                    log_success("Step 4 skipped (probe exists)")
                 else:
-                    log_error("Step 4 failed (critical, stopping)")
-                    failed_steps.append((4, 'Train Linear Probe', False))
-                    critical_failures.append((4, 'Train Linear Probe', False))
+                    probe_args = ['--stage', args.stage, '--sae_type', args.sae_type, '--layer_quantile', lq]
+                    if demo:
+                        probe_args.extend(['--demographic', demo])
+                    success = run_script(scripts_dir / '04_train_linear_probe.py', probe_args)
+                    if success:
+                        log_success("Step 4 completed")
+                    else:
+                        log_error("Step 4 failed (critical, stopping)")
+                        failed_steps.append((4, 'Train Linear Probe', False))
+                        critical_failures.append((4, 'Train Linear Probe', False))
 
             # Check for failures
             probe_failures = [f for f in failed_steps if f[0] == 4]
@@ -638,7 +732,10 @@ def main():
                 log_error(f"Step 4 partially failed - {len(probe_failures)} probe(s) failed")
                 critical_failures.extend(probe_failures)
             elif layer_mode == 'all' or demographic_mode == 'all':
-                log_success("Step 4 completed - All probes trained")
+                if skipped_count > 0:
+                    log_success(f"Step 4 completed - {skipped_count} probe(s) skipped (already exist)")
+                else:
+                    log_success("Step 4 completed - All probes trained")
 
         # === STEP 5: Compute IG2 Attribution ===
         # Note: For 'all' mode, we compute IG2 for each demographic using its specific probe
@@ -647,6 +744,7 @@ def main():
             log_step(5, "Compute IG2 Attribution")
             update_step_status(5, "Compute IG2 Attribution")
 
+            skipped_count = 0
             # Determine iteration scope
             if layer_mode == 'all' and demographic_mode == 'all':
                 # Full matrix: all layers × all demographics
@@ -656,6 +754,12 @@ def main():
                 for lq in layer_quantiles:
                     for demo in demographics:
                         count += 1
+                        # Check if IG2 already exists
+                        if check_ig2_exists(args.stage, demo, lq):
+                            log_warning(f"[{count}/{total}] IG2 for {lq} × {demo} already exists, skipping...")
+                            skipped_count += 1
+                            continue
+
                         print(f"\n  [{count}/{total}] Computing IG2 for {lq} × {demo}...")
                         ig2_args = ['--stage', args.stage, '--sae_type', args.sae_type,
                                    '--layer_quantile', lq, '--num_steps', str(args.num_steps),
@@ -672,6 +776,12 @@ def main():
                 log_info(f"Computing IG2 for {len(layer_quantiles)} layer quantiles...")
                 demo = demographics[0] if demographics else None
                 for j, lq in enumerate(layer_quantiles):
+                    # Check if IG2 already exists
+                    if demo and check_ig2_exists(args.stage, demo, lq):
+                        log_warning(f"[{j+1}/{len(layer_quantiles)}] IG2 for layer {lq} already exists, skipping...")
+                        skipped_count += 1
+                        continue
+
                     print(f"\n  [{j+1}/{len(layer_quantiles)}] Computing IG2 for layer {lq}...")
                     ig2_args = ['--stage', args.stage, '--sae_type', args.sae_type,
                                '--layer_quantile', lq, '--num_steps', str(args.num_steps)]
@@ -689,6 +799,12 @@ def main():
                 log_info(f"Computing IG2 for {len(demographics)} demographic categories...")
                 lq = layer_quantiles[0]
                 for i, demo in enumerate(demographics):
+                    # Check if IG2 already exists
+                    if check_ig2_exists(args.stage, demo):
+                        log_warning(f"[{i+1}/{len(demographics)}] IG2 for {demo} already exists, skipping...")
+                        skipped_count += 1
+                        continue
+
                     print(f"\n  [{i+1}/{len(demographics)}] Computing IG2 for {demo}...")
                     ig2_args = ['--stage', args.stage, '--sae_type', args.sae_type,
                                '--layer_quantile', lq, '--num_steps', str(args.num_steps),
@@ -701,17 +817,24 @@ def main():
                         log_success(f"Completed IG2 for {demo}")
             else:
                 # Single layer, single demographic
-                ig2_args = ['--stage', args.stage, '--sae_type', args.sae_type,
-                           '--layer_quantile', layer_quantiles[0], '--num_steps', str(args.num_steps)]
-                if demographics:
-                    ig2_args.extend(['--demographic', demographics[0]])
-                success = run_script(scripts_dir / '05_compute_ig2.py', ig2_args)
-                if success:
-                    log_success("Step 5 completed")
+                demo = demographics[0] if demographics else None
+                lq = layer_quantiles[0]
+                # Check if IG2 already exists
+                if demo and check_ig2_exists(args.stage, demo):
+                    log_warning(f"IG2 for {demo} already exists, skipping...")
+                    log_success("Step 5 skipped (IG2 exists)")
                 else:
-                    log_error("Step 5 failed (critical, stopping)")
-                    failed_steps.append((5, 'Compute IG2', False))
-                    critical_failures.append((5, 'Compute IG2', False))
+                    ig2_args = ['--stage', args.stage, '--sae_type', args.sae_type,
+                               '--layer_quantile', lq, '--num_steps', str(args.num_steps)]
+                    if demo:
+                        ig2_args.extend(['--demographic', demo])
+                    success = run_script(scripts_dir / '05_compute_ig2.py', ig2_args)
+                    if success:
+                        log_success("Step 5 completed")
+                    else:
+                        log_error("Step 5 failed (critical, stopping)")
+                        failed_steps.append((5, 'Compute IG2', False))
+                        critical_failures.append((5, 'Compute IG2', False))
 
             # Check for failures
             ig2_failures = [f for f in failed_steps if f[0] == 5]
@@ -719,7 +842,10 @@ def main():
                 log_error(f"Step 5 partially failed - {len(ig2_failures)} IG2 computation(s) failed")
                 critical_failures.extend(ig2_failures)
             elif layer_mode == 'all' or demographic_mode == 'all':
-                log_success("Step 5 completed - All IG2 computations done")
+                if skipped_count > 0:
+                    log_success(f"Step 5 completed - {skipped_count} IG2(s) skipped (already exist)")
+                else:
+                    log_success("Step 5 completed - All IG2 computations done")
 
         # === STEP 6: Verify Bias Features ===
         # Note: For 'all' mode, we verify each demographic using its specific probe and IG2 results
@@ -728,6 +854,7 @@ def main():
             log_step(6, "Verify Bias Features")
             update_step_status(6, "Verify Bias Features")
 
+            skipped_count = 0
             # Determine iteration scope
             if layer_mode == 'all' and demographic_mode == 'all':
                 # Full matrix: all layers × all demographics
@@ -737,6 +864,12 @@ def main():
                 for lq in layer_quantiles:
                     for demo in demographics:
                         count += 1
+                        # Check if verification already exists
+                        if check_verification_exists(args.stage, demo, lq):
+                            log_warning(f"[{count}/{total}] Verification for {lq} × {demo} already exists, skipping...")
+                            skipped_count += 1
+                            continue
+
                         print(f"\n  [{count}/{total}] Verifying {lq} × {demo}...")
                         verify_args = ['--stage', args.stage, '--sae_type', args.sae_type,
                                       '--layer_quantile', lq, '--demographic', demo]
@@ -752,6 +885,12 @@ def main():
                 log_info(f"Verifying bias features for {len(layer_quantiles)} layer quantiles...")
                 demo = demographics[0] if demographics else None
                 for j, lq in enumerate(layer_quantiles):
+                    # Check if verification already exists
+                    if demo and check_verification_exists(args.stage, demo, lq):
+                        log_warning(f"[{j+1}/{len(layer_quantiles)}] Verification for layer {lq} already exists, skipping...")
+                        skipped_count += 1
+                        continue
+
                     print(f"\n  [{j+1}/{len(layer_quantiles)}] Verifying layer {lq}...")
                     verify_args = ['--stage', args.stage, '--sae_type', args.sae_type, '--layer_quantile', lq]
                     if demo:
@@ -768,6 +907,12 @@ def main():
                 log_info(f"Verifying bias features for {len(demographics)} demographic categories...")
                 lq = layer_quantiles[0]
                 for i, demo in enumerate(demographics):
+                    # Check if verification already exists
+                    if check_verification_exists(args.stage, demo):
+                        log_warning(f"[{i+1}/{len(demographics)}] Verification for {demo} already exists, skipping...")
+                        skipped_count += 1
+                        continue
+
                     print(f"\n  [{i+1}/{len(demographics)}] Verifying {demo}...")
                     verify_args = ['--stage', args.stage, '--sae_type', args.sae_type,
                                   '--layer_quantile', lq, '--demographic', demo]
@@ -779,22 +924,32 @@ def main():
                         log_success(f"Completed verification for {demo}")
             else:
                 # Single layer, single demographic
-                verify_args = ['--stage', args.stage, '--sae_type', args.sae_type, '--layer_quantile', layer_quantiles[0]]
-                if demographics:
-                    verify_args.extend(['--demographic', demographics[0]])
-                success = run_script(scripts_dir / '06_verify_bias_features.py', verify_args)
-                if success:
-                    log_success("Step 6 completed")
+                demo = demographics[0] if demographics else None
+                lq = layer_quantiles[0]
+                # Check if verification already exists
+                if demo and check_verification_exists(args.stage, demo):
+                    log_warning(f"Verification for {demo} already exists, skipping...")
+                    log_success("Step 6 skipped (verification exists)")
                 else:
-                    log_error("Step 6 failed (critical, stopping)")
-                    failed_steps.append((6, 'Verify Bias Features', False))
+                    verify_args = ['--stage', args.stage, '--sae_type', args.sae_type, '--layer_quantile', lq]
+                    if demo:
+                        verify_args.extend(['--demographic', demo])
+                    success = run_script(scripts_dir / '06_verify_bias_features.py', verify_args)
+                    if success:
+                        log_success("Step 6 completed")
+                    else:
+                        log_error("Step 6 failed (critical, stopping)")
+                        failed_steps.append((6, 'Verify Bias Features', False))
 
             # Check for failures
             verify_failures = [f for f in failed_steps if f[0] == 6]
             if verify_failures:
                 log_error(f"Step 6 partially failed - {len(verify_failures)} verification(s) failed")
             elif layer_mode == 'all' or demographic_mode == 'all':
-                log_success("Step 6 completed - All verifications done")
+                if skipped_count > 0:
+                    log_success(f"Step 6 completed - {skipped_count} verification(s) skipped (already exist)")
+                else:
+                    log_success("Step 6 completed - All verifications done")
 
     # Final summary
     print()

@@ -151,6 +151,62 @@ def run_script(script_path: Path, args: List[str], verbose: bool = True) -> bool
         return False
 
 
+# =========================================================================
+# Model existence check functions
+# =========================================================================
+
+def check_sae_exists(stage: str, sae_type: str, layer_quantile: str) -> bool:
+    """Check if SAE model already exists for given configuration."""
+    sae_path = PROJECT_ROOT / 'results' / 'models' / f'sae-{sae_type}_{stage}_{layer_quantile}' / 'model.pth'
+    return sae_path.exists()
+
+
+def check_probe_exists(stage: str, demographic: str, layer_quantile: str = None) -> bool:
+    """Check if linear probe already exists for given configuration."""
+    if layer_quantile:
+        # Per-layer probe path (for multi-layer mode)
+        probe_path = PROJECT_ROOT / 'results' / stage / demographic / 'probe' / f'{layer_quantile}_linear_probe.pt'
+        if probe_path.exists():
+            return True
+    # Standard probe path
+    probe_path = PROJECT_ROOT / 'results' / stage / demographic / 'probe' / 'linear_probe.pt'
+    return probe_path.exists()
+
+
+def check_ig2_exists(stage: str, demographic: str, layer_quantile: str = None) -> bool:
+    """Check if IG2 results already exist for given configuration."""
+    if layer_quantile:
+        # Per-layer IG2 path (for multi-layer mode)
+        ig2_path = PROJECT_ROOT / 'results' / stage / demographic / 'ig2' / f'{layer_quantile}_ig2_results.pt'
+        if ig2_path.exists():
+            return True
+    # Standard IG2 path
+    ig2_path = PROJECT_ROOT / 'results' / stage / demographic / 'ig2' / 'ig2_results.pt'
+    return ig2_path.exists()
+
+
+def check_verification_exists(stage: str, demographic: str, layer_quantile: str = None) -> bool:
+    """Check if verification results already exist for given configuration."""
+    if layer_quantile:
+        # Per-layer verification path
+        verify_dir = PROJECT_ROOT / 'results' / stage / demographic / 'verification' / layer_quantile
+    else:
+        verify_dir = PROJECT_ROOT / 'results' / stage / demographic / 'verification'
+    # Check if directory exists and has content
+    if verify_dir.exists():
+        return any(verify_dir.iterdir())
+    return False
+
+
+def check_activations_exist(stage: str, demographic: str = None) -> bool:
+    """Check if activations already exist for given configuration."""
+    if demographic:
+        act_path = PROJECT_ROOT / 'results' / stage / demographic / 'activations.pkl'
+    else:
+        act_path = PROJECT_ROOT / 'results' / stage / 'activations.pkl'
+    return act_path.exists()
+
+
 def run_extraction_for_demographic(
     scripts_dir: Path,
     stage: str,
@@ -581,6 +637,17 @@ def main():
                 log_info(f"Skipping {LAYER_LABELS[lq]} (before start point)")
                 continue
 
+            # Check if SAE already exists
+            if check_sae_exists(args.stage, args.sae_type, lq):
+                log_warning(f"[{i+1}/{len(layers)}] SAE for {LAYER_LABELS[lq]} already exists, skipping...")
+                for demo in demographics:
+                    key = (demo, lq)
+                    if key not in completed:
+                        completed[key] = []
+                    if 'S' not in completed[key]:
+                        completed[key].append('S')
+                continue
+
             log_substep(f"[{i+1}/{len(layers)}] Training SAE for {LAYER_LABELS[lq]}...")
 
             save_status({
@@ -636,70 +703,90 @@ def main():
             print(f"{Colors.MAGENTA}Experiment {experiment_count}/{total_experiments}: {demo} + {LAYER_LABELS[lq]}{Colors.NC}")
             print(f"{Colors.MAGENTA}{'='*60}{Colors.NC}")
 
+            # Initialize completed entry if not exists
+            if key not in completed:
+                completed[key] = []
+
             # 3a. Train linear probe
-            log_substep(f"Training probe for {demo} @ {lq}...")
-            save_status({
-                **load_status(),
-                'current_step': 'probe_training',
-                'current_layer': lq,
-                'current_demographic': demo,
-                'completed_count': experiment_count - 1
-            })
-
-            success = run_probe_training(scripts_dir, args.stage, args.sae_type, lq, demo, args.verbose)
-
-            if success:
-                log_success(f"Completed probe for {demo} @ {lq}")
-                if key not in completed:
-                    completed[key] = []
-                completed[key].append('P')
+            probe_exists = check_probe_exists(args.stage, demo, lq)
+            if probe_exists:
+                log_warning(f"Probe for {demo} @ {lq} already exists, skipping...")
+                if 'P' not in completed[key]:
+                    completed[key].append('P')
             else:
-                log_error(f"Failed probe for {demo} @ {lq}")
-                failed.append((demo, lq, 'probe'))
-                continue  # Skip IG2 and verification if probe failed
-
-            # 3b. Compute IG2
-            log_substep(f"Computing IG2 for {demo} @ {lq}...")
-            save_status({
-                **load_status(),
-                'current_step': 'ig2_computation',
-                'current_layer': lq,
-                'current_demographic': demo
-            })
-
-            success = run_ig2_computation(
-                scripts_dir, args.stage, args.sae_type, lq, demo,
-                args.num_steps, args.verbose
-            )
-
-            if success:
-                log_success(f"Completed IG2 for {demo} @ {lq}")
-                completed[key].append('I')
-            else:
-                log_error(f"Failed IG2 for {demo} @ {lq}")
-                failed.append((demo, lq, 'ig2'))
-                continue  # Skip verification if IG2 failed
-
-            # 3c. Verification
-            if not args.skip_verification:
-                log_substep(f"Verifying {demo} @ {lq}...")
+                log_substep(f"Training probe for {demo} @ {lq}...")
                 save_status({
                     **load_status(),
-                    'current_step': 'verification',
+                    'current_step': 'probe_training',
+                    'current_layer': lq,
+                    'current_demographic': demo,
+                    'completed_count': experiment_count - 1
+                })
+
+                success = run_probe_training(scripts_dir, args.stage, args.sae_type, lq, demo, args.verbose)
+
+                if success:
+                    log_success(f"Completed probe for {demo} @ {lq}")
+                    completed[key].append('P')
+                else:
+                    log_error(f"Failed probe for {demo} @ {lq}")
+                    failed.append((demo, lq, 'probe'))
+                    continue  # Skip IG2 and verification if probe failed
+
+            # 3b. Compute IG2
+            ig2_exists = check_ig2_exists(args.stage, demo, lq)
+            if ig2_exists:
+                log_warning(f"IG2 for {demo} @ {lq} already exists, skipping...")
+                if 'I' not in completed[key]:
+                    completed[key].append('I')
+            else:
+                log_substep(f"Computing IG2 for {demo} @ {lq}...")
+                save_status({
+                    **load_status(),
+                    'current_step': 'ig2_computation',
                     'current_layer': lq,
                     'current_demographic': demo
                 })
 
-                success = run_verification(
-                    scripts_dir, args.stage, args.sae_type, lq, demo, args.verbose
+                success = run_ig2_computation(
+                    scripts_dir, args.stage, args.sae_type, lq, demo,
+                    args.num_steps, args.verbose
                 )
 
                 if success:
-                    log_success(f"Completed verification for {demo} @ {lq}")
-                    completed[key].append('V')
+                    log_success(f"Completed IG2 for {demo} @ {lq}")
+                    completed[key].append('I')
                 else:
-                    log_error(f"Failed verification for {demo} @ {lq}")
-                    failed.append((demo, lq, 'verification'))
+                    log_error(f"Failed IG2 for {demo} @ {lq}")
+                    failed.append((demo, lq, 'ig2'))
+                    continue  # Skip verification if IG2 failed
+
+            # 3c. Verification
+            if not args.skip_verification:
+                verification_exists = check_verification_exists(args.stage, demo, lq)
+                if verification_exists:
+                    log_warning(f"Verification for {demo} @ {lq} already exists, skipping...")
+                    if 'V' not in completed[key]:
+                        completed[key].append('V')
+                else:
+                    log_substep(f"Verifying {demo} @ {lq}...")
+                    save_status({
+                        **load_status(),
+                        'current_step': 'verification',
+                        'current_layer': lq,
+                        'current_demographic': demo
+                    })
+
+                    success = run_verification(
+                        scripts_dir, args.stage, args.sae_type, lq, demo, args.verbose
+                    )
+
+                    if success:
+                        log_success(f"Completed verification for {demo} @ {lq}")
+                        completed[key].append('V')
+                    else:
+                        log_error(f"Failed verification for {demo} @ {lq}")
+                        failed.append((demo, lq, 'verification'))
 
             # Print progress matrix
             print_progress_matrix(demographics, layers, completed, (demo, lq, 'done'))
