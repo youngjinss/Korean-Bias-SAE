@@ -2,11 +2,15 @@
 Integrated Gradients (IG²) for SAE features.
 
 Adapted from Bias-Neurons paper to work with SAE learned features instead of raw neurons.
+
+Supports:
+- Batch processing to handle large datasets without OOM
+- Multi-GPU via DataParallel for faster computation
 """
 
 import torch
 import torch.nn as nn
-from typing import Tuple
+from typing import Tuple, List, Union, Optional
 import logging
 
 logger = logging.getLogger(__name__)
@@ -17,7 +21,9 @@ def compute_ig2_for_sae_features(
     linear_probe: nn.Module,
     num_steps: int = 20,
     use_squared_gap: bool = False,
-    device: str = "cuda"
+    device: Union[str, torch.device] = "cuda",
+    devices: Optional[List[str]] = None,
+    batch_size: int = 16
 ) -> torch.Tensor:
     """
     Compute IG² attribution scores for SAE features following Bias-Neurons paper.
@@ -32,87 +38,124 @@ def compute_ig2_for_sae_features(
     IG²_gap(x) = IG²(x, demo1) - IG²(x, demo2)
                = x * (∫∇f_demo1(αx)dα - ∫∇f_demo2(αx)dα)
 
+    Supports:
+    - Batch processing: Process samples in smaller batches to avoid OOM
+    - Multi-GPU: Use DataParallel when multiple devices are provided
+
     Args:
-        sae_features: SAE feature activations (batch, feature_dim)
+        sae_features: SAE feature activations (num_samples, feature_dim)
         linear_probe: Trained BiasProbe module
         num_steps: Number of integration steps (m in the paper)
         use_squared_gap: If True, use squared difference; if False, use absolute difference
-        device: Device to compute on
+        device: Primary device to compute on (used if devices is None)
+        devices: List of devices for multi-GPU (e.g., ["cuda:2", "cuda:3"])
+        batch_size: Number of samples to process at once (default: 16)
 
     Returns:
         ig2_scores: Attribution score per feature (feature_dim,)
     """
-    logger.debug(f"Computing IG² with {num_steps} steps")
+    # Determine devices to use
+    if devices is not None and len(devices) > 1:
+        primary_device = torch.device(devices[0])
+        use_multi_gpu = True
+        device_ids = [int(d.split(':')[1]) for d in devices]
+        logger.info(f"Multi-GPU enabled for IG²: {devices} (device_ids: {device_ids})")
+    else:
+        primary_device = torch.device(device if devices is None else devices[0])
+        use_multi_gpu = False
+        device_ids = None
 
-    # Move to device
-    sae_features = sae_features.to(device)
-    linear_probe = linear_probe.to(device)
+    logger.info(f"Computing IG² with {num_steps} steps, batch_size={batch_size}")
+
+    num_samples, feature_dim = sae_features.shape
+
+    # Prepare probe for computation
+    linear_probe = linear_probe.to(primary_device)
     linear_probe.eval()
 
-    batch_size, feature_dim = sae_features.shape
+    # Wrap with DataParallel if multi-GPU
+    if use_multi_gpu:
+        probe_parallel = nn.DataParallel(linear_probe, device_ids=device_ids)
+        logger.info(f"Wrapped probe with DataParallel on devices: {device_ids}")
+    else:
+        probe_parallel = linear_probe
 
-    # Detach features
-    sae_features = sae_features.detach().clone()
+    # Accumulate IG² scores across all batches
+    ig2_demo1_total = torch.zeros(feature_dim, device=primary_device)
+    ig2_demo2_total = torch.zeros(feature_dim, device=primary_device)
+    feature_sum = torch.zeros(feature_dim, device=primary_device)
 
-    # Baseline: zero features
-    baseline = torch.zeros_like(sae_features)
+    # Process in batches
+    num_batches = (num_samples + batch_size - 1) // batch_size
 
-    # Step size for integration
-    step = (sae_features - baseline) / num_steps
+    for batch_idx in range(num_batches):
+        start_idx = batch_idx * batch_size
+        end_idx = min(start_idx + batch_size, num_samples)
 
-    # Compute IG² for demographic 1 (class 0)
-    ig2_demo1 = torch.zeros(feature_dim, device=device)
+        # Get batch
+        batch_features = sae_features[start_idx:end_idx].detach().clone().to(primary_device)
+        current_batch_size = batch_features.shape[0]
 
-    for i in range(num_steps):
-        # Scaled input from baseline to actual features
-        scaled_features = (baseline + step * i).requires_grad_(True)
+        logger.debug(f"Processing batch {batch_idx + 1}/{num_batches} (samples {start_idx}-{end_idx})")
 
-        # Forward pass
-        logits = linear_probe(scaled_features)  # (batch, output_dim)
+        # Accumulate feature values for final averaging
+        feature_sum += batch_features.sum(dim=0)
 
-        # Get logits for demographic 1 (class 0)
-        logits_demo1 = logits[:, 0]
+        # Baseline: zero features
+        baseline = torch.zeros_like(batch_features)
 
-        # Backward to get gradients
-        gradients = torch.autograd.grad(
-            outputs=logits_demo1.sum(),
-            inputs=scaled_features,
-            create_graph=False,
-            retain_graph=False
-        )[0]
+        # Step size for integration
+        step = (batch_features - baseline) / num_steps
 
-        # Accumulate gradients (sum across batch)
-        ig2_demo1 += gradients.sum(dim=0)
+        # Compute IG² for demographic 1 (class 0)
+        for i in range(num_steps):
+            scaled_features = (baseline + step * i).requires_grad_(True)
 
-    # Multiply by step and average feature value
-    ig2_demo1 = (sae_features.mean(dim=0) * ig2_demo1 / num_steps)
+            # Forward pass (uses DataParallel if multi-GPU)
+            logits = probe_parallel(scaled_features)
+            logits_demo1 = logits[:, 0]
 
-    # Compute IG² for demographic 2 (class 1)
-    ig2_demo2 = torch.zeros(feature_dim, device=device)
+            # Backward to get gradients
+            gradients = torch.autograd.grad(
+                outputs=logits_demo1.sum(),
+                inputs=scaled_features,
+                create_graph=False,
+                retain_graph=False
+            )[0]
 
-    for i in range(num_steps):
-        # Scaled input from baseline to actual features
-        scaled_features = (baseline + step * i).requires_grad_(True)
+            # Accumulate gradients
+            ig2_demo1_total += gradients.sum(dim=0)
 
-        # Forward pass
-        logits = linear_probe(scaled_features)  # (batch, output_dim)
+        # Compute IG² for demographic 2 (class 1)
+        for i in range(num_steps):
+            scaled_features = (baseline + step * i).requires_grad_(True)
 
-        # Get logits for demographic 2 (class 1)
-        logits_demo2 = logits[:, 1]
+            # Forward pass
+            logits = probe_parallel(scaled_features)
+            logits_demo2 = logits[:, 1]
 
-        # Backward to get gradients
-        gradients = torch.autograd.grad(
-            outputs=logits_demo2.sum(),
-            inputs=scaled_features,
-            create_graph=False,
-            retain_graph=False
-        )[0]
+            # Backward to get gradients
+            gradients = torch.autograd.grad(
+                outputs=logits_demo2.sum(),
+                inputs=scaled_features,
+                create_graph=False,
+                retain_graph=False
+            )[0]
 
-        # Accumulate gradients (sum across batch)
-        ig2_demo2 += gradients.sum(dim=0)
+            # Accumulate gradients
+            ig2_demo2_total += gradients.sum(dim=0)
 
-    # Multiply by step and average feature value
-    ig2_demo2 = (sae_features.mean(dim=0) * ig2_demo2 / num_steps)
+        # Clear cache after each batch to free memory
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    # Compute final IG² scores
+    # Average feature value across all samples
+    feature_mean = feature_sum / num_samples
+
+    # Normalize accumulated gradients by number of samples and steps
+    ig2_demo1 = feature_mean * ig2_demo1_total / (num_samples * num_steps)
+    ig2_demo2 = feature_mean * ig2_demo2_total / (num_samples * num_steps)
 
     # Compute gap: IG²(demo1) - IG²(demo2)
     ig2_gap = ig2_demo1 - ig2_demo2
@@ -123,7 +166,7 @@ def compute_ig2_for_sae_features(
     else:
         ig2_scores = torch.abs(ig2_gap)
 
-    logger.debug(f"IG² computation complete. Score range: [{ig2_scores.min():.4f}, {ig2_scores.max():.4f}]")
+    logger.info(f"IG² computation complete. Score range: [{ig2_scores.min():.4f}, {ig2_scores.max():.4f}]")
 
     return ig2_scores
 

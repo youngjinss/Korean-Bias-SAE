@@ -74,9 +74,17 @@ def main(args):
     else:
         demographic = config['data']['demographic']
 
-    # Get primary device from devices list
+    # Get devices from config (list of devices for multi-GPU support)
     devices = config['model'].get('devices', ['cuda' if torch.cuda.is_available() else 'cpu'])
-    device = torch.device(devices[0] if isinstance(devices, list) else devices)
+    if not isinstance(devices, list):
+        devices = [devices]
+    device = torch.device(devices[0])
+
+    # Get IG2 batch size from config
+    ig2_batch_size = config.get('ig2', {}).get('batch_size', 16)
+
+    print(f"Devices: {devices}")
+    print(f"IG2 batch size: {ig2_batch_size}")
 
     # Get demographic info
     demo_info = get_demographic_info(demographic, data_dir='data')
@@ -208,13 +216,17 @@ def main(args):
     print(f"{'='*60}")
     print(f"Number of steps: {args.num_steps}")
     print(f"Use squared gap: {args.use_squared_gap}")
+    print(f"Batch size: {ig2_batch_size}")
+    print(f"Multi-GPU: {len(devices) > 1} ({devices})")
 
     ig2_scores = compute_ig2_for_sae_features(
         sae_features=sae_features,
         linear_probe=probe,
         num_steps=args.num_steps,
         use_squared_gap=args.use_squared_gap,
-        device=device
+        device=device,
+        devices=devices,
+        batch_size=ig2_batch_size
     )
 
     print(f"\nIG2 scores computed!")
