@@ -9,3 +9,5 @@ data/generated/
 results/*
 
 notebooks/visualizations/assets
+
+logs/
