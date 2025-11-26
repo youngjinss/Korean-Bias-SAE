@@ -6,6 +6,12 @@ This script runs the entire bias detection pipeline end-to-end.
 Supports running for:
 - Single demographic: --demographic 성별
 - All demographics: --demographic all (generates data for all demographics, then merges)
+- Single layer: --layer_quantile q2
+- All layers: --layer_quantile all (trains SAE and probes for q1, q2, q3)
+
+Full experiment matrix:
+- Use both --demographic all --layer_quantile all to run full 3×9 matrix
+- For comprehensive experiments, consider using run_full_experiment.py instead
 
 Background execution:
 - --background: Run pipeline in background with logging
@@ -15,6 +21,8 @@ Background execution:
 Usage:
     python scripts/run_pipeline.py --stage pilot --demographic all
     python scripts/run_pipeline.py --stage medium --demographic 성별
+    python scripts/run_pipeline.py --stage pilot --layer_quantile all --demographic 성별
+    python scripts/run_pipeline.py --stage pilot --layer_quantile all --demographic all
     python scripts/run_pipeline.py --stage pilot --background  # Run in background
     python scripts/run_pipeline.py --status                    # Check status
     python scripts/run_pipeline.py --stop                      # Stop background run
@@ -307,8 +315,8 @@ def main():
         '--layer_quantile',
         type=str,
         default='q2',
-        choices=['q1', 'q2', 'q3'],
-        help='Layer quantile (default: q2)'
+        choices=['q1', 'q2', 'q3', 'all'],
+        help='Layer quantile (default: q2). Use "all" to run for all 3 layers.'
     )
     parser.add_argument(
         '--num_steps',
@@ -387,6 +395,14 @@ def main():
         demographics = None  # Use config default
         demographic_mode = 'config'
 
+    # Determine layers to process
+    if args.layer_quantile == 'all':
+        layer_quantiles = ['q1', 'q2', 'q3']
+        layer_mode = 'all'
+    else:
+        layer_quantiles = [args.layer_quantile]
+        layer_mode = 'single'
+
     # Print configuration
     print("=" * 80)
     print("Korean Bias SAE - Pipeline Runner")
@@ -396,6 +412,8 @@ def main():
     print(f"  Stage:           {args.stage}")
     print(f"  SAE Type:        {args.sae_type}")
     print(f"  Layer Quantile:  {args.layer_quantile}")
+    if layer_mode == 'all':
+        print(f"  Layers:          Q1 (25%), Q2 (50%), Q3 (75%)")
     print(f"  IG2 Steps:       {args.num_steps}")
     print(f"  Demographic:     {args.demographic or 'config default'}")
     if demographic_mode == 'all':
@@ -403,6 +421,11 @@ def main():
     print(f"  Start From:      Step {args.start_from}")
     print(f"  Project Root:    {project_root}")
     print()
+
+    # If running all layers and all demographics, suggest using run_full_experiment.py
+    if layer_mode == 'all' and demographic_mode == 'all':
+        log_info("Tip: For full experiments, consider using run_full_experiment.py for better progress tracking.")
+        print()
 
     # Build activation extraction args based on demographic mode
     def get_extraction_args(demo=None):
@@ -502,50 +525,103 @@ def main():
         # === STEP 3: Train Sparse Autoencoder (SAE) ===
         # Note: For 'all' mode, merge_activations.py saves to default location (results/{stage}/activations.pkl)
         # so no special path argument needed
+        # For layer_mode == 'all', we train separate SAE for each layer
         if args.start_from <= 3:
             log_step(3, "Train Sparse Autoencoder (SAE)")
             update_step_status(3, "Train Sparse Autoencoder (SAE)")
-            sae_args = ['--stage', args.stage, '--sae_type', args.sae_type, '--layer_quantile', args.layer_quantile]
-            success = run_script(scripts_dir / '03_train_sae.py', sae_args)
-            if success:
-                log_success("Step 3 completed")
+
+            if layer_mode == 'all':
+                # Train SAE for each layer
+                log_info(f"Training SAE for {len(layer_quantiles)} layer quantiles...")
+                for j, lq in enumerate(layer_quantiles):
+                    print(f"\n  [{j+1}/{len(layer_quantiles)}] Training SAE for layer {lq}...")
+                    sae_args = ['--stage', args.stage, '--sae_type', args.sae_type, '--layer_quantile', lq]
+                    success = run_script(scripts_dir / '03_train_sae.py', sae_args)
+                    if not success:
+                        log_error(f"Failed to train SAE for layer {lq}")
+                        failed_steps.append((3, f'Train SAE ({lq})', False))
+                    else:
+                        log_success(f"Completed SAE for layer {lq}")
+
+                # Check if all SAEs were trained
+                sae_failures = [f for f in failed_steps if f[0] == 3]
+                if not sae_failures:
+                    log_success("Step 3 completed - All SAEs trained")
+                else:
+                    log_error(f"Step 3 partially failed - {len(sae_failures)} SAE(s) failed")
+                    critical_failures.extend(sae_failures)
             else:
-                log_error("Step 3 failed (critical, stopping)")
-                failed_steps.append((3, 'Train SAE', False))
-                critical_failures.append((3, 'Train SAE', False))
+                # Single layer
+                sae_args = ['--stage', args.stage, '--sae_type', args.sae_type, '--layer_quantile', layer_quantiles[0]]
+                success = run_script(scripts_dir / '03_train_sae.py', sae_args)
+                if success:
+                    log_success("Step 3 completed")
+                else:
+                    log_error("Step 3 failed (critical, stopping)")
+                    failed_steps.append((3, 'Train SAE', False))
+                    critical_failures.append((3, 'Train SAE', False))
 
         # === STEP 4: Train Linear Probe ===
         # Note: For 'all' mode, we train SEPARATE probes for each demographic
         # This follows the pattern from korean-sparse-llm-features-open where
         # one SAE is trained but multiple independent probes are used for different label types
+        # For layer_mode == 'all', we also iterate through layers
         if args.start_from <= 4 and not critical_failures:
             log_step(4, "Train Linear Probe")
             update_step_status(4, "Train Linear Probe")
 
-            if demographic_mode == 'all':
-                # Train separate probe for each demographic
+            # Determine iteration scope
+            if layer_mode == 'all' and demographic_mode == 'all':
+                # Full matrix: all layers × all demographics
+                total = len(layer_quantiles) * len(demographics)
+                log_info(f"Training probes for {len(layer_quantiles)} layers × {len(demographics)} demographics = {total} combinations...")
+                count = 0
+                for lq in layer_quantiles:
+                    for demo in demographics:
+                        count += 1
+                        print(f"\n  [{count}/{total}] Training probe for {lq} × {demo}...")
+                        probe_args = ['--stage', args.stage, '--sae_type', args.sae_type,
+                                     '--layer_quantile', lq, '--demographic', demo]
+                        success = run_script(scripts_dir / '04_train_linear_probe.py', probe_args)
+                        if not success:
+                            log_error(f"Failed to train probe for {lq} × {demo}")
+                            failed_steps.append((4, f'Train Probe ({lq}×{demo})', False))
+                        else:
+                            log_success(f"Completed probe for {lq} × {demo}")
+
+            elif layer_mode == 'all':
+                # All layers, single demographic
+                log_info(f"Training probes for {len(layer_quantiles)} layer quantiles...")
+                demo = demographics[0] if demographics else None
+                for j, lq in enumerate(layer_quantiles):
+                    print(f"\n  [{j+1}/{len(layer_quantiles)}] Training probe for layer {lq}...")
+                    probe_args = ['--stage', args.stage, '--sae_type', args.sae_type, '--layer_quantile', lq]
+                    if demo:
+                        probe_args.extend(['--demographic', demo])
+                    success = run_script(scripts_dir / '04_train_linear_probe.py', probe_args)
+                    if not success:
+                        log_error(f"Failed to train probe for layer {lq}")
+                        failed_steps.append((4, f'Train Probe ({lq})', False))
+                    else:
+                        log_success(f"Completed probe for layer {lq}")
+
+            elif demographic_mode == 'all':
+                # Single layer, all demographics
                 log_info(f"Training probes for {len(demographics)} demographic categories...")
+                lq = layer_quantiles[0]
                 for i, demo in enumerate(demographics):
                     print(f"\n  [{i+1}/{len(demographics)}] Training probe for {demo}...")
                     probe_args = ['--stage', args.stage, '--sae_type', args.sae_type,
-                                 '--layer_quantile', args.layer_quantile, '--demographic', demo]
+                                 '--layer_quantile', lq, '--demographic', demo]
                     success = run_script(scripts_dir / '04_train_linear_probe.py', probe_args)
                     if not success:
                         log_error(f"Failed to train probe for {demo}")
                         failed_steps.append((4, f'Train Probe ({demo})', False))
                     else:
                         log_success(f"Completed probe for {demo}")
-
-                # Check if all probes were trained successfully
-                probe_failures = [f for f in failed_steps if f[0] == 4]
-                if not probe_failures:
-                    log_success("Step 4 completed - All probes trained")
-                else:
-                    log_error(f"Step 4 partially failed - {len(probe_failures)} probe(s) failed")
-                    critical_failures.extend(probe_failures)
             else:
-                # Single demographic or config default
-                probe_args = ['--stage', args.stage, '--sae_type', args.sae_type, '--layer_quantile', args.layer_quantile]
+                # Single layer, single demographic
+                probe_args = ['--stage', args.stage, '--sae_type', args.sae_type, '--layer_quantile', layer_quantiles[0]]
                 if demographics:
                     probe_args.extend(['--demographic', demographics[0]])
                 success = run_script(scripts_dir / '04_train_linear_probe.py', probe_args)
@@ -556,19 +632,66 @@ def main():
                     failed_steps.append((4, 'Train Linear Probe', False))
                     critical_failures.append((4, 'Train Linear Probe', False))
 
+            # Check for failures
+            probe_failures = [f for f in failed_steps if f[0] == 4]
+            if probe_failures:
+                log_error(f"Step 4 partially failed - {len(probe_failures)} probe(s) failed")
+                critical_failures.extend(probe_failures)
+            elif layer_mode == 'all' or demographic_mode == 'all':
+                log_success("Step 4 completed - All probes trained")
+
         # === STEP 5: Compute IG2 Attribution ===
         # Note: For 'all' mode, we compute IG2 for each demographic using its specific probe
+        # For layer_mode == 'all', we also iterate through layers
         if args.start_from <= 5 and not critical_failures:
             log_step(5, "Compute IG2 Attribution")
             update_step_status(5, "Compute IG2 Attribution")
 
-            if demographic_mode == 'all':
-                # Compute IG2 for each demographic
+            # Determine iteration scope
+            if layer_mode == 'all' and demographic_mode == 'all':
+                # Full matrix: all layers × all demographics
+                total = len(layer_quantiles) * len(demographics)
+                log_info(f"Computing IG2 for {len(layer_quantiles)} layers × {len(demographics)} demographics = {total} combinations...")
+                count = 0
+                for lq in layer_quantiles:
+                    for demo in demographics:
+                        count += 1
+                        print(f"\n  [{count}/{total}] Computing IG2 for {lq} × {demo}...")
+                        ig2_args = ['--stage', args.stage, '--sae_type', args.sae_type,
+                                   '--layer_quantile', lq, '--num_steps', str(args.num_steps),
+                                   '--demographic', demo]
+                        success = run_script(scripts_dir / '05_compute_ig2.py', ig2_args)
+                        if not success:
+                            log_error(f"Failed to compute IG2 for {lq} × {demo}")
+                            failed_steps.append((5, f'Compute IG2 ({lq}×{demo})', False))
+                        else:
+                            log_success(f"Completed IG2 for {lq} × {demo}")
+
+            elif layer_mode == 'all':
+                # All layers, single demographic
+                log_info(f"Computing IG2 for {len(layer_quantiles)} layer quantiles...")
+                demo = demographics[0] if demographics else None
+                for j, lq in enumerate(layer_quantiles):
+                    print(f"\n  [{j+1}/{len(layer_quantiles)}] Computing IG2 for layer {lq}...")
+                    ig2_args = ['--stage', args.stage, '--sae_type', args.sae_type,
+                               '--layer_quantile', lq, '--num_steps', str(args.num_steps)]
+                    if demo:
+                        ig2_args.extend(['--demographic', demo])
+                    success = run_script(scripts_dir / '05_compute_ig2.py', ig2_args)
+                    if not success:
+                        log_error(f"Failed to compute IG2 for layer {lq}")
+                        failed_steps.append((5, f'Compute IG2 ({lq})', False))
+                    else:
+                        log_success(f"Completed IG2 for layer {lq}")
+
+            elif demographic_mode == 'all':
+                # Single layer, all demographics
                 log_info(f"Computing IG2 for {len(demographics)} demographic categories...")
+                lq = layer_quantiles[0]
                 for i, demo in enumerate(demographics):
                     print(f"\n  [{i+1}/{len(demographics)}] Computing IG2 for {demo}...")
                     ig2_args = ['--stage', args.stage, '--sae_type', args.sae_type,
-                               '--layer_quantile', args.layer_quantile, '--num_steps', str(args.num_steps),
+                               '--layer_quantile', lq, '--num_steps', str(args.num_steps),
                                '--demographic', demo]
                     success = run_script(scripts_dir / '05_compute_ig2.py', ig2_args)
                     if not success:
@@ -576,18 +699,10 @@ def main():
                         failed_steps.append((5, f'Compute IG2 ({demo})', False))
                     else:
                         log_success(f"Completed IG2 for {demo}")
-
-                # Check if all IG2 computations were successful
-                ig2_failures = [f for f in failed_steps if f[0] == 5]
-                if not ig2_failures:
-                    log_success("Step 5 completed - All IG2 computations done")
-                else:
-                    log_error(f"Step 5 partially failed - {len(ig2_failures)} IG2 computation(s) failed")
-                    critical_failures.extend(ig2_failures)
             else:
-                # Single demographic or config default
+                # Single layer, single demographic
                 ig2_args = ['--stage', args.stage, '--sae_type', args.sae_type,
-                           '--layer_quantile', args.layer_quantile, '--num_steps', str(args.num_steps)]
+                           '--layer_quantile', layer_quantiles[0], '--num_steps', str(args.num_steps)]
                 if demographics:
                     ig2_args.extend(['--demographic', demographics[0]])
                 success = run_script(scripts_dir / '05_compute_ig2.py', ig2_args)
@@ -598,35 +713,73 @@ def main():
                     failed_steps.append((5, 'Compute IG2', False))
                     critical_failures.append((5, 'Compute IG2', False))
 
+            # Check for failures
+            ig2_failures = [f for f in failed_steps if f[0] == 5]
+            if ig2_failures:
+                log_error(f"Step 5 partially failed - {len(ig2_failures)} IG2 computation(s) failed")
+                critical_failures.extend(ig2_failures)
+            elif layer_mode == 'all' or demographic_mode == 'all':
+                log_success("Step 5 completed - All IG2 computations done")
+
         # === STEP 6: Verify Bias Features ===
         # Note: For 'all' mode, we verify each demographic using its specific probe and IG2 results
+        # For layer_mode == 'all', we also iterate through layers
         if args.start_from <= 6 and not critical_failures:
             log_step(6, "Verify Bias Features")
             update_step_status(6, "Verify Bias Features")
 
-            if demographic_mode == 'all':
-                # Verify for each demographic
+            # Determine iteration scope
+            if layer_mode == 'all' and demographic_mode == 'all':
+                # Full matrix: all layers × all demographics
+                total = len(layer_quantiles) * len(demographics)
+                log_info(f"Verifying bias features for {len(layer_quantiles)} layers × {len(demographics)} demographics = {total} combinations...")
+                count = 0
+                for lq in layer_quantiles:
+                    for demo in demographics:
+                        count += 1
+                        print(f"\n  [{count}/{total}] Verifying {lq} × {demo}...")
+                        verify_args = ['--stage', args.stage, '--sae_type', args.sae_type,
+                                      '--layer_quantile', lq, '--demographic', demo]
+                        success = run_script(scripts_dir / '06_verify_bias_features.py', verify_args)
+                        if not success:
+                            log_error(f"Failed to verify {lq} × {demo}")
+                            failed_steps.append((6, f'Verify ({lq}×{demo})', False))
+                        else:
+                            log_success(f"Completed verification for {lq} × {demo}")
+
+            elif layer_mode == 'all':
+                # All layers, single demographic
+                log_info(f"Verifying bias features for {len(layer_quantiles)} layer quantiles...")
+                demo = demographics[0] if demographics else None
+                for j, lq in enumerate(layer_quantiles):
+                    print(f"\n  [{j+1}/{len(layer_quantiles)}] Verifying layer {lq}...")
+                    verify_args = ['--stage', args.stage, '--sae_type', args.sae_type, '--layer_quantile', lq]
+                    if demo:
+                        verify_args.extend(['--demographic', demo])
+                    success = run_script(scripts_dir / '06_verify_bias_features.py', verify_args)
+                    if not success:
+                        log_error(f"Failed to verify layer {lq}")
+                        failed_steps.append((6, f'Verify ({lq})', False))
+                    else:
+                        log_success(f"Completed verification for layer {lq}")
+
+            elif demographic_mode == 'all':
+                # Single layer, all demographics
                 log_info(f"Verifying bias features for {len(demographics)} demographic categories...")
+                lq = layer_quantiles[0]
                 for i, demo in enumerate(demographics):
                     print(f"\n  [{i+1}/{len(demographics)}] Verifying {demo}...")
                     verify_args = ['--stage', args.stage, '--sae_type', args.sae_type,
-                                  '--layer_quantile', args.layer_quantile, '--demographic', demo]
+                                  '--layer_quantile', lq, '--demographic', demo]
                     success = run_script(scripts_dir / '06_verify_bias_features.py', verify_args)
                     if not success:
                         log_error(f"Failed to verify {demo}")
                         failed_steps.append((6, f'Verify ({demo})', False))
                     else:
                         log_success(f"Completed verification for {demo}")
-
-                # Check if all verifications were successful
-                verify_failures = [f for f in failed_steps if f[0] == 6]
-                if not verify_failures:
-                    log_success("Step 6 completed - All verifications done")
-                else:
-                    log_error(f"Step 6 partially failed - {len(verify_failures)} verification(s) failed")
             else:
-                # Single demographic or config default
-                verify_args = ['--stage', args.stage, '--sae_type', args.sae_type, '--layer_quantile', args.layer_quantile]
+                # Single layer, single demographic
+                verify_args = ['--stage', args.stage, '--sae_type', args.sae_type, '--layer_quantile', layer_quantiles[0]]
                 if demographics:
                     verify_args.extend(['--demographic', demographics[0]])
                 success = run_script(scripts_dir / '06_verify_bias_features.py', verify_args)
@@ -635,6 +788,13 @@ def main():
                 else:
                     log_error("Step 6 failed (critical, stopping)")
                     failed_steps.append((6, 'Verify Bias Features', False))
+
+            # Check for failures
+            verify_failures = [f for f in failed_steps if f[0] == 6]
+            if verify_failures:
+                log_error(f"Step 6 partially failed - {len(verify_failures)} verification(s) failed")
+            elif layer_mode == 'all' or demographic_mode == 'all':
+                log_success("Step 6 completed - All verifications done")
 
     # Final summary
     print()
@@ -674,11 +834,42 @@ def main():
     print()
     log_info("Key outputs:")
 
-    if demographic_mode == 'all':
+    if layer_mode == 'all' and demographic_mode == 'all':
+        # Full matrix: all layers × all demographics
         print(f"  - Per-demographic activations: results/{args.stage}/<demographic>/activations.pkl")
         print(f"  - Merged Activations:          results/{args.stage}/activations.pkl")
         print(f"  - Metadata:                    results/{args.stage}/activations_metadata.json")
-        print(f"  - SAE Model (shared):          results/models/sae-{args.sae_type}_{args.stage}_{args.layer_quantile}/model.pth")
+        print(f"  - SAE Models (per layer):")
+        for lq in layer_quantiles:
+            print(f"      - {lq}: results/models/sae-{args.sae_type}_{args.stage}_{lq}/model.pth")
+        print(f"  - Per-layer × demographic outputs:")
+        for lq in layer_quantiles:
+            print(f"      {lq}:")
+            for demo in demographics:
+                print(f"        {demo}:")
+                print(f"          - Probe:        results/{args.stage}/{demo}/probe/{lq}_linear_probe.pt")
+                print(f"          - IG2:          results/{args.stage}/{demo}/ig2/{lq}_ig2_results.pt")
+                print(f"          - Verification: results/{args.stage}/{demo}/verification/{lq}/")
+    elif layer_mode == 'all':
+        # All layers, single demographic
+        demo_name = demographics[0] if demographics else 'default'
+        print(f"  - Activations:         results/{args.stage}/{demo_name}/activations.pkl")
+        print(f"  - SAE Models (per layer):")
+        for lq in layer_quantiles:
+            print(f"      - {lq}: results/models/sae-{args.sae_type}_{args.stage}_{lq}/model.pth")
+        print(f"  - Per-layer outputs:")
+        for lq in layer_quantiles:
+            print(f"      {lq}:")
+            print(f"        - Probe:        results/{args.stage}/{demo_name}/probe/{lq}_linear_probe.pt")
+            print(f"        - IG2:          results/{args.stage}/{demo_name}/ig2/{lq}_ig2_results.pt")
+            print(f"        - Verification: results/{args.stage}/{demo_name}/verification/{lq}/")
+    elif demographic_mode == 'all':
+        # Single layer, all demographics
+        lq = layer_quantiles[0]
+        print(f"  - Per-demographic activations: results/{args.stage}/<demographic>/activations.pkl")
+        print(f"  - Merged Activations:          results/{args.stage}/activations.pkl")
+        print(f"  - Metadata:                    results/{args.stage}/activations_metadata.json")
+        print(f"  - SAE Model (shared):          results/models/sae-{args.sae_type}_{args.stage}_{lq}/model.pth")
         print(f"  - Per-demographic outputs:")
         for demo in demographics:
             print(f"      {demo}:")
@@ -686,9 +877,11 @@ def main():
             print(f"        - IG2:          results/{args.stage}/{demo}/ig2/ig2_results.pt")
             print(f"        - Verification: results/{args.stage}/{demo}/verification/")
     else:
+        # Single layer, single demographic
         demo_name = demographics[0] if demographics else 'default'
+        lq = layer_quantiles[0]
         print(f"  - Activations:         results/{args.stage}/{demo_name}/activations.pkl")
-        print(f"  - SAE Model:           results/models/sae-{args.sae_type}_{args.stage}_{args.layer_quantile}/model.pth")
+        print(f"  - SAE Model:           results/models/sae-{args.sae_type}_{args.stage}_{lq}/model.pth")
         print(f"  - Linear Probe:        results/{args.stage}/{demo_name}/probe/linear_probe.pt")
         print(f"  - IG2 Results:         results/{args.stage}/{demo_name}/ig2/ig2_results.pt")
         print(f"  - Verification:        results/{args.stage}/{demo_name}/verification/")
