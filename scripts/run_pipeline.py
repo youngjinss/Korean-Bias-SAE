@@ -198,6 +198,10 @@ def run_extraction_parallel(
     num_gpus = len(devices)
     results = {}
 
+    # Create logs directory
+    logs_dir = PROJECT_ROOT / "logs" / "extraction"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+
     if num_gpus == 1:
         # Single GPU: run sequentially
         log_info(f"Single GPU mode: processing {len(demographics)} demographics sequentially")
@@ -208,6 +212,7 @@ def run_extraction_parallel(
 
     log_info(f"Multi-GPU mode: {num_gpus} GPUs available")
     log_info(f"Processing {len(demographics)} demographics in parallel batches")
+    log_info(f"Logs saved to: {logs_dir}/")
 
     # Process in batches of num_gpus
     for batch_start in range(0, len(demographics), num_gpus):
@@ -219,6 +224,7 @@ def run_extraction_parallel(
 
         # Start processes for this batch
         processes = []
+        log_files = []
         for i, demo in enumerate(batch_demos):
             device = devices[i]
             gpu_idx = parse_cuda_device(device)
@@ -235,27 +241,34 @@ def run_extraction_parallel(
                 '--device', 'cuda:0'  # Always cuda:0 because CUDA_VISIBLE_DEVICES remaps
             ]
 
-            if verbose:
-                log_info(f"  GPU {gpu_idx}: {demo}")
+            # Create log file for this demographic
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            log_file_path = logs_dir / f"extraction_{stage}_{demo}_{timestamp}.log"
+            log_file = open(log_file_path, 'w')
+            log_files.append(log_file)
 
-            # Start process
+            if verbose:
+                log_info(f"  GPU {gpu_idx}: {demo} -> {log_file_path.name}")
+
+            # Start process with output redirected to log file
             proc = subprocess.Popen(
                 cmd,
                 env=env,
-                stdout=subprocess.PIPE if not verbose else None,
-                stderr=subprocess.PIPE if not verbose else None
+                stdout=log_file,
+                stderr=subprocess.STDOUT  # Merge stderr into stdout
             )
-            processes.append((demo, proc))
+            processes.append((demo, proc, log_file_path))
 
         # Wait for all processes in this batch to complete
-        for demo, proc in processes:
+        for (demo, proc, log_path), log_file in zip(processes, log_files):
             returncode = proc.wait()
+            log_file.close()
             results[demo] = (returncode == 0)
 
             if returncode == 0:
                 log_success(f"  Completed: {demo}")
             else:
-                log_error(f"  Failed: {demo} (exit code {returncode})")
+                log_error(f"  Failed: {demo} (exit code {returncode}) - see {log_path}")
 
     return results
 
