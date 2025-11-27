@@ -348,21 +348,28 @@ def main(args):
     print(f"SAE features shape: {sae_features.shape}")
 
     # Load probe - use per-demographic directory when demographic is specified
+    # Use layer-specific filename for multi-layer experiments
+    probe_filename = f'{args.layer_quantile}_linear_probe.pt'
     if args.demographic:
-        probe_path = results_dir / args.stage / demographic / 'probe' / 'linear_probe.pt'
+        probe_path = results_dir / args.stage / demographic / 'probe' / probe_filename
     else:
-        probe_path = results_dir / args.stage / 'probe' / 'linear_probe.pt'
+        probe_path = results_dir / args.stage / 'probe' / probe_filename
 
     if not probe_path.exists():
-        # Fallback: try per-demographic path if default doesn't exist
-        fallback_path = results_dir / args.stage / demographic / 'probe' / 'linear_probe.pt'
+        # Fallback: try legacy non-layer-specific path for backward compatibility
+        legacy_filename = 'linear_probe.pt'
+        if args.demographic:
+            fallback_path = results_dir / args.stage / demographic / 'probe' / legacy_filename
+        else:
+            fallback_path = results_dir / args.stage / 'probe' / legacy_filename
+
         if fallback_path.exists():
             probe_path = fallback_path
-            print(f"Using per-demographic probe: {probe_path}")
+            print(f"Using legacy probe path (no layer prefix): {probe_path}")
         else:
             print(f"\n❌ ERROR: Linear probe not found at {probe_path}")
-            print(f"Also checked: {fallback_path}")
-            print(f"Please run 04_train_linear_probe.py --demographic {demographic} first")
+            print(f"Also checked legacy path: {fallback_path}")
+            print(f"Please run 04_train_linear_probe.py --demographic {demographic} --layer_quantile {args.layer_quantile} first")
             return
 
     print(f"\nLoading probe from {probe_path}")
@@ -380,21 +387,28 @@ def main(args):
     print(f"Probe loaded successfully")
 
     # Load IG² results - use per-demographic directory when demographic is specified
+    # Use layer-specific filename for multi-layer experiments
+    ig2_filename = f'{args.layer_quantile}_ig2_results.pt'
     if args.demographic:
-        ig2_path = results_dir / args.stage / demographic / 'ig2' / 'ig2_results.pt'
+        ig2_path = results_dir / args.stage / demographic / 'ig2' / ig2_filename
     else:
-        ig2_path = results_dir / args.stage / 'ig2' / 'ig2_results.pt'
+        ig2_path = results_dir / args.stage / 'ig2' / ig2_filename
 
     if not ig2_path.exists():
-        # Fallback: try per-demographic path if default doesn't exist
-        fallback_path = results_dir / args.stage / demographic / 'ig2' / 'ig2_results.pt'
+        # Fallback: try legacy non-layer-specific path for backward compatibility
+        legacy_filename = 'ig2_results.pt'
+        if args.demographic:
+            fallback_path = results_dir / args.stage / demographic / 'ig2' / legacy_filename
+        else:
+            fallback_path = results_dir / args.stage / 'ig2' / legacy_filename
+
         if fallback_path.exists():
             ig2_path = fallback_path
-            print(f"Using per-demographic IG² results: {ig2_path}")
+            print(f"Using legacy IG² path (no layer prefix): {ig2_path}")
         else:
             print(f"\n❌ ERROR: IG² results not found at {ig2_path}")
-            print(f"Also checked: {fallback_path}")
-            print(f"Please run 05_compute_ig2.py --demographic {demographic} first")
+            print(f"Also checked legacy path: {fallback_path}")
+            print(f"Please run 05_compute_ig2.py --demographic {demographic} --layer_quantile {args.layer_quantile} first")
             return
 
     print(f"\nLoading IG² results from {ig2_path}")
@@ -468,10 +482,11 @@ def main(args):
             print(f"  ✗ Bias features effect not significant (|z| ≤ 2)")
 
     # Save results - use per-demographic directory when demographic is specified
+    # Use layer-specific subdirectory for multi-layer experiments
     if args.demographic:
-        output_dir = results_dir / args.stage / demographic / 'verification'
+        output_dir = results_dir / args.stage / demographic / 'verification' / args.layer_quantile
     else:
-        output_dir = results_dir / args.stage / 'verification'
+        output_dir = results_dir / args.stage / 'verification' / args.layer_quantile
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Save suppression result

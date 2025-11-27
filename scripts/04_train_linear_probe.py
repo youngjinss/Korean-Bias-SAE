@@ -329,19 +329,23 @@ def main(args):
         'best_accuracy': best_accuracy,
     }
 
-    probe_path = output_dir / 'linear_probe.pt'
+    # Use layer-specific filename for multi-layer experiments
+    probe_filename = f'{args.layer_quantile}_linear_probe.pt'
+    probe_path = output_dir / probe_filename
     torch.save(checkpoint, probe_path)
     print(f"\nSaved probe to: {probe_path}")
 
-    # Save training metrics
+    # Save training metrics with layer-specific filename
     metrics = {
         'losses': losses,
         'accuracies': accuracies,
         'final_accuracy': final_accuracy,
         'best_accuracy': best_accuracy,
+        'layer_quantile': args.layer_quantile,
     }
 
-    metrics_path = output_dir / 'training_metrics.pkl'
+    metrics_filename = f'{args.layer_quantile}_training_metrics.pkl'
+    metrics_path = output_dir / metrics_filename
     with open(metrics_path, 'wb') as f:
         pickle.dump(metrics, f)
     print(f"Saved metrics to: {metrics_path}")

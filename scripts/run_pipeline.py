@@ -303,11 +303,10 @@ def check_sae_exists(stage: str, sae_type: str, layer_quantile: str) -> bool:
 def check_probe_exists(stage: str, demographic: str, layer_quantile: str = None) -> bool:
     """Check if linear probe already exists for given configuration."""
     if layer_quantile:
-        # Per-layer probe path (for multi-layer mode)
+        # Per-layer probe path (for multi-layer mode) - this is now the primary path
         probe_path = PROJECT_ROOT / 'results' / stage / demographic / 'probe' / f'{layer_quantile}_linear_probe.pt'
-        if probe_path.exists():
-            return True
-    # Standard probe path
+        return probe_path.exists()
+    # Legacy path (only for single-layer mode without layer_quantile specified)
     probe_path = PROJECT_ROOT / 'results' / stage / demographic / 'probe' / 'linear_probe.pt'
     return probe_path.exists()
 
@@ -315,11 +314,10 @@ def check_probe_exists(stage: str, demographic: str, layer_quantile: str = None)
 def check_ig2_exists(stage: str, demographic: str, layer_quantile: str = None) -> bool:
     """Check if IG2 results already exist for given configuration."""
     if layer_quantile:
-        # Per-layer IG2 path (for multi-layer mode)
+        # Per-layer IG2 path (for multi-layer mode) - this is now the primary path
         ig2_path = PROJECT_ROOT / 'results' / stage / demographic / 'ig2' / f'{layer_quantile}_ig2_results.pt'
-        if ig2_path.exists():
-            return True
-    # Standard IG2 path
+        return ig2_path.exists()
+    # Legacy path (only for single-layer mode without layer_quantile specified)
     ig2_path = PROJECT_ROOT / 'results' / stage / demographic / 'ig2' / 'ig2_results.pt'
     return ig2_path.exists()
 

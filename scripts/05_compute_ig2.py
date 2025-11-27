@@ -178,21 +178,28 @@ def main(args):
     print(f"SAE features shape: {sae_features.shape}")
 
     # Load probe - use per-demographic directory when demographic is specified
+    # Use layer-specific filename for multi-layer experiments
+    probe_filename = f'{args.layer_quantile}_linear_probe.pt'
     if args.demographic:
-        probe_path = results_dir / args.stage / demographic / 'probe' / 'linear_probe.pt'
+        probe_path = results_dir / args.stage / demographic / 'probe' / probe_filename
     else:
-        probe_path = results_dir / args.stage / 'probe' / 'linear_probe.pt'
+        probe_path = results_dir / args.stage / 'probe' / probe_filename
 
     if not probe_path.exists():
-        # Fallback: try per-demographic path if default doesn't exist
-        fallback_path = results_dir / args.stage / demographic / 'probe' / 'linear_probe.pt'
+        # Fallback: try legacy non-layer-specific path for backward compatibility
+        legacy_filename = 'linear_probe.pt'
+        if args.demographic:
+            fallback_path = results_dir / args.stage / demographic / 'probe' / legacy_filename
+        else:
+            fallback_path = results_dir / args.stage / 'probe' / legacy_filename
+
         if fallback_path.exists():
             probe_path = fallback_path
-            print(f"Using per-demographic probe: {probe_path}")
+            print(f"Using legacy probe path (no layer prefix): {probe_path}")
         else:
             print(f"\nERROR: Linear probe not found at {probe_path}")
-            print(f"Also checked: {fallback_path}")
-            print(f"Please run 04_train_linear_probe.py --demographic {demographic} first")
+            print(f"Also checked legacy path: {fallback_path}")
+            print(f"Please run 04_train_linear_probe.py --demographic {demographic} --layer_quantile {args.layer_quantile} first")
             return
 
     print(f"\nLoading probe from {probe_path}")
@@ -281,17 +288,21 @@ def main(args):
         }
     )
 
-    result_path = output_dir / 'ig2_results.pt'
+    # Use layer-specific filename for multi-layer experiments
+    result_filename = f'{args.layer_quantile}_ig2_results.pt'
+    result_path = output_dir / result_filename
     result.save(result_path)
 
     print(f"\nIG2 results saved to: {result_path}")
 
-    # Save feature importance ranking
+    # Save feature importance ranking with layer-specific filename
     feature_ranking = torch.argsort(ig2_scores, descending=True)
-    ranking_path = output_dir / 'feature_ranking.pt'
+    ranking_filename = f'{args.layer_quantile}_feature_ranking.pt'
+    ranking_path = output_dir / ranking_filename
     torch.save({
         'ranking': feature_ranking,
         'scores': ig2_scores[feature_ranking],
+        'layer_quantile': args.layer_quantile,
     }, ranking_path)
 
     print(f"Feature ranking saved to: {ranking_path}")
