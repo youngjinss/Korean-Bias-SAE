@@ -9,19 +9,19 @@ This enables comprehensive comparison visualizations in notebook 06.
 
 Usage:
     # Run full experiment (all layers, all demographics)
-    python scripts/run_full_experiment.py --stage pilot
+    python scripts/run_pipeline.py --stage pilot
 
     # Run for specific layers only
-    python scripts/run_full_experiment.py --stage pilot --layers q1 q2
+    python scripts/run_pipeline.py --stage pilot --layers q1 q2
 
     # Run for specific demographics only
-    python scripts/run_full_experiment.py --stage pilot --demographics 성별 인종
+    python scripts/run_pipeline.py --stage pilot --demographics 성별 인종
 
     # Skip activation extraction (if already done)
-    python scripts/run_full_experiment.py --stage pilot --skip-extraction
+    python scripts/run_pipeline.py --stage pilot --skip-extraction
 
     # Run in background
-    python scripts/run_full_experiment.py --stage pilot --background
+    python scripts/run_pipeline.py --stage pilot --background
 
 Output Structure:
     results/
