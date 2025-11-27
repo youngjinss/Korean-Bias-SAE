@@ -3,7 +3,7 @@
 # Model Configuration
 model:
   name: "LGAI-EXAONE/EXAONE-3.0-7.8B-Instruct"
-  devices: ["cuda:2", "cuda:3"]  # List of devices; single element = single-GPU, multiple = DataParallel
+  devices: ["cuda:2", "cuda:3", "cuda:0", "cuda:1"]  # List of devices; single element = single-GPU, multiple = DataParallel
   dtype: "float16"  # or "float32" for better precision
 
 # SAE Configuration

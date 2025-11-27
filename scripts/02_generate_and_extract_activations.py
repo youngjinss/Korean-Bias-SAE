@@ -155,9 +155,13 @@ def main(args):
 
     # Load EXAONE
     print("\nLoading EXAONE model...")
-    # Get primary device from devices list
-    devices = config['model'].get('devices', ['cuda'])
-    primary_device = devices[0] if isinstance(devices, list) else devices
+    # Get device: command line arg > config > default
+    if args.device:
+        primary_device = args.device
+    else:
+        devices = config['model'].get('devices', ['cuda'])
+        primary_device = devices[0] if isinstance(devices, list) else devices
+    print(f"Using device: {primary_device}")
     exaone = EXAONEWrapper(
         model_name=config['model']['name'],
         device=primary_device,
@@ -414,6 +418,13 @@ if __name__ == '__main__':
         type=str,
         default=None,
         help='Demographic category (성별, 인종, 종교, etc.). Overrides config.'
+    )
+    parser.add_argument(
+        '--device',
+        type=str,
+        default=None,
+        help='CUDA device to use (e.g., cuda:0). Overrides config. '
+             'Use this when running with CUDA_VISIBLE_DEVICES.'
     )
     args = parser.parse_args()
 

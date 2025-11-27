@@ -57,6 +57,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
 from src.utils.demographic_utils import get_all_demographics
+from src.utils.experiment_utils import load_config
 
 # Colors for terminal output
 class Colors:
@@ -149,6 +150,114 @@ def run_script(script_path: Path, args: List[str], verbose: bool = True) -> bool
     except Exception as e:
         log_error(f"Unexpected error: {e}")
         return False
+
+
+def get_devices_from_config() -> List[str]:
+    """Get list of GPU devices from config file."""
+    try:
+        config = load_config('configs/experiment_config.yaml')
+        devices = config.get('model', {}).get('devices', ['cuda:0'])
+        if isinstance(devices, str):
+            devices = [devices]
+        return devices
+    except Exception as e:
+        log_warning(f"Could not load devices from config: {e}")
+        return ['cuda:0']
+
+
+def parse_cuda_device(device: str) -> str:
+    """Extract GPU index from device string (e.g., 'cuda:2' -> '2')."""
+    if device.startswith('cuda:'):
+        return device.split(':')[1]
+    elif device == 'cuda':
+        return '0'
+    else:
+        return '0'
+
+
+def run_extraction_parallel(
+    scripts_dir: Path,
+    stage: str,
+    demographics: List[str],
+    devices: List[str],
+    verbose: bool = True
+) -> Dict[str, bool]:
+    """
+    Run activation extraction in parallel across multiple GPUs.
+
+    Args:
+        scripts_dir: Path to scripts directory
+        stage: Experiment stage
+        demographics: List of demographics to process
+        devices: List of CUDA devices (e.g., ['cuda:0', 'cuda:1', 'cuda:2', 'cuda:3'])
+        verbose: Verbose output
+
+    Returns:
+        Dictionary mapping demographic -> success status
+    """
+    num_gpus = len(devices)
+    results = {}
+
+    if num_gpus == 1:
+        # Single GPU: run sequentially
+        log_info(f"Single GPU mode: processing {len(demographics)} demographics sequentially")
+        for demo in demographics:
+            success = run_extraction_for_demographic(scripts_dir, stage, demo, verbose)
+            results[demo] = success
+        return results
+
+    log_info(f"Multi-GPU mode: {num_gpus} GPUs available")
+    log_info(f"Processing {len(demographics)} demographics in parallel batches")
+
+    # Process in batches of num_gpus
+    for batch_start in range(0, len(demographics), num_gpus):
+        batch_demos = demographics[batch_start:batch_start + num_gpus]
+        batch_num = batch_start // num_gpus + 1
+        total_batches = (len(demographics) + num_gpus - 1) // num_gpus
+
+        log_substep(f"Batch {batch_num}/{total_batches}: {', '.join(batch_demos)}")
+
+        # Start processes for this batch
+        processes = []
+        for i, demo in enumerate(batch_demos):
+            device = devices[i]
+            gpu_idx = parse_cuda_device(device)
+
+            # Set CUDA_VISIBLE_DEVICES for this process
+            env = os.environ.copy()
+            env['CUDA_VISIBLE_DEVICES'] = gpu_idx
+
+            cmd = [
+                sys.executable,
+                str(scripts_dir / '02_generate_and_extract_activations.py'),
+                '--stage', stage,
+                '--demographic', demo,
+                '--device', 'cuda:0'  # Always cuda:0 because CUDA_VISIBLE_DEVICES remaps
+            ]
+
+            if verbose:
+                log_info(f"  GPU {gpu_idx}: {demo}")
+
+            # Start process
+            proc = subprocess.Popen(
+                cmd,
+                env=env,
+                stdout=subprocess.PIPE if not verbose else None,
+                stderr=subprocess.PIPE if not verbose else None
+            )
+            processes.append((demo, proc))
+
+        # Wait for all processes in this batch to complete
+        for demo, proc in processes:
+            returncode = proc.wait()
+            results[demo] = (returncode == 0)
+
+            if returncode == 0:
+                log_success(f"  Completed: {demo}")
+            else:
+                log_error(f"  Failed: {demo} (exit code {returncode})")
+
+    return results
 
 
 # =========================================================================
@@ -577,38 +686,57 @@ def main():
         start_demo_idx = demographics.index(args.start_from_demo)
 
     # =========================================================================
-    # PHASE 1: Extract activations for all demographics
+    # PHASE 1: Extract activations for all demographics (Multi-GPU supported)
     # =========================================================================
     if not args.skip_extraction:
         log_step("1", "Extract Activations for All Demographics")
 
+        # Get devices from config for multi-GPU support
+        devices = get_devices_from_config()
+        log_info(f"Devices from config: {devices}")
+
+        # Filter demographics based on start point
+        demos_to_process = []
         for i, demo in enumerate(demographics):
             if i < start_demo_idx and start_layer_idx == 0:
                 log_info(f"Skipping {demo} (before start point)")
-                continue
-
-            log_substep(f"[{i+1}/{len(demographics)}] Extracting activations for {demo}...")
-
-            save_status({
-                **load_status(),
-                'current_step': 'extraction',
-                'current_demographic': demo,
-                'current_layer': 'all'
-            })
-
-            success = run_extraction_for_demographic(scripts_dir, args.stage, demo, args.verbose)
-
-            if success:
-                log_success(f"Completed extraction for {demo}")
+                # Mark as already extracted
                 for lq in layers:
                     key = (demo, lq)
                     if key not in completed:
                         completed[key] = []
                     completed[key].append('E')
             else:
-                log_error(f"Failed extraction for {demo}")
-                for lq in layers:
-                    failed.append((demo, lq, 'extraction'))
+                demos_to_process.append(demo)
+
+        if demos_to_process:
+            save_status({
+                **load_status(),
+                'current_step': 'extraction',
+                'current_demographic': 'parallel',
+                'current_layer': 'all'
+            })
+
+            # Run extraction in parallel across GPUs
+            extraction_results = run_extraction_parallel(
+                scripts_dir=scripts_dir,
+                stage=args.stage,
+                demographics=demos_to_process,
+                devices=devices,
+                verbose=args.verbose
+            )
+
+            # Update completion status
+            for demo, success in extraction_results.items():
+                if success:
+                    for lq in layers:
+                        key = (demo, lq)
+                        if key not in completed:
+                            completed[key] = []
+                        completed[key].append('E')
+                else:
+                    for lq in layers:
+                        failed.append((demo, lq, 'extraction'))
 
         # Merge activations for SAE training
         log_substep("Merging activations...")
