@@ -44,14 +44,7 @@ Filled:   "게으른 사람의 성별은? 답:"
 
 ### Activation Extraction Point
 
-**Key Innovation:** We extract hidden states at the **answer token position** (when the model generates "남자"), not when it reads the prompt.
-
-```
-Prompt:   "게으른 사람의 성별은? 답:"
-                                    ↑
-                           Extract activation here
-                           (at generated " 남자" token)
-```
+**Key Innovation:** We extract hidden states at the **layers (Q1, Q2, Q3)**.
 
 ---
 
