@@ -331,7 +331,7 @@ From `03_analyze_important_neurons.ipynb`:
 
 ## References
 
-1. **Bias-Neurons:** Liu, Yan, et al. "The devil is in the neurons: Interpreting and mitigating social biases in language models." The twelfth international conference on learning representations. 2024.
+1. **Bias-Neurons:** Liu, Yan, et al. "The devil is in the neurons: Interpreting and mitigating social biases in language models." The twelfth international conference on learning representations. 2024. (https://github.com/theNamek/Bias-Neurons)
 2. **Gated SAE:** Rajamanoharan et al. (2024) - https://arxiv.org/abs/2404.16014
 3. **EXAONE:** LG AI Research - https://huggingface.co/LGAI-EXAONE/EXAONE-3.0-7.8B-Instruct
 4. **Korean Sparse LLM Features** - https://github.com/leo-bpark/korean-sparse-llm-features-open 
