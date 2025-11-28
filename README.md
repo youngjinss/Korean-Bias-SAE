@@ -275,6 +275,7 @@ korean-bias-sae/
 │       ├── 02_visualize_bias_feature_verification.ipynb
 │       ├── 03_analyze_important_neurons.ipynb
 │       └── assets/                   # Output directory
+├── scripts/
 │   ├── run_pipeline.py               # ⭐ Master pipeline script (Python, supports --demographic all)
 │   ├── 00_check_prerequisites.py     # ✅ Dependency check
 │   ├── 01_measure_baseline_bias.py   # ✅ Baseline measurement
@@ -285,8 +286,6 @@ korean-bias-sae/
 │   ├── 06_verify_bias_features.py    # ✅ Bias verification (--demographic for per-demographic)
 │   ├── merge_activations.py          # ✅ Merge multi-demographic activations for gSAE
 │   └── generate_mock_data.py         # ✅ Mock data for visualization testing
-
-    └── {demographic}/                  # Per-demographic results
 └── results/
     ├── models/                        # SAE models
     │   └── sae-gated_{stage}_{layer}/     # Shared SAE model
@@ -296,34 +295,17 @@ korean-bias-sae/
         ├── activations.pkl           # Merged activations (for SAE training)
         ├── activations_metadata.json # Multi-demographic sample indices
         │
-        ├── 성별/                      # ⭐ Per-demographic results (gender)
+        ├── {demographic}/            # Per-demographic results
         │   ├── activations.pkl       # Gender-only activations
         │   ├── probe/
         │   │   └── {layer}_linear_probe.pt
         │   ├── ig2/
         │   │   └── {layer}_ig2_results.pt
         │   └── verification/
-                └── {layer}/
+        │       └── {layer}/
         │           ├── suppression_test.json
         │           ├── amplification_test.json
         │           └── random_control.json
-        │
-        ├── 인종/                      # ⭐ Per-demographic results (race)
-        │   ├── activations.pkl
-        │   ├── probe/
-        │   │   └── linear_probe.pt   # Race-specific probe
-        │   ├── ig2/
-        │   │   └── ig2_results.pt    # Race bias features
-        │   └── verification/
-        │       └── ...
-        │
-        └── 종교/                      # ⭐ Per-demographic results (religion)
-            ├── activations.pkl
-            ├── probe/
-            │   └── linear_probe.pt   # Religion-specific probe
-            ├── ig2/
-            │   └── ig2_results.pt    # Religion bias features
-            └── verification/
 ```
 
 ---
@@ -349,6 +331,6 @@ From `03_analyze_important_neurons.ipynb`:
 
 ## References
 
-1. **Bias-Neurons:** "The Devil is in the Neurons" (ICLR 2024)
+1. **Bias-Neurons:** Liu, Yan, et al. "The devil is in the neurons: Interpreting and mitigating social biases in language models." The twelfth international conference on learning representations. 2024.
 2. **Gated SAE:** Rajamanoharan et al. (2024) - https://arxiv.org/abs/2404.16014
 3. **EXAONE:** LG AI Research - https://huggingface.co/LGAI-EXAONE/EXAONE-3.0-7.8B-Instruct
